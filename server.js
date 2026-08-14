@@ -702,253 +702,88 @@ function saveDb(data) {
 // AUTH LOGIN
 // ======================================================
 
-app.post(
-  '/api/auth/login',
-  async (req, res) => {
-    const {
-      email,
-      password,
-      location
-    } = req.body || {};
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password, location } = req.body || {};
 
-    const rawInput =
-      String(email || '').trim();
+  const input = String(email || '').trim().toLowerCase();
+  const pass = String(password || '');
 
-    const inputLower =
-      rawInput.toLowerCase();
+  const { timeStr, dateStr, isoStr } = getServerTimeDetails();
 
-    const plainPassword =
-      String(password || '');
-
-    const {
-      timeStr,
-      dateStr,
-      isoStr
-    } = getServerTimeDetails();
-
-    if (
-      !rawInput ||
-      !plainPassword
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          'Email/User ID and password are required'
-      });
+  const demoAdmins = [
+    {
+      id: 'usr-1',
+      name: 'Super Administrator 1',
+      email: 'admin1@cabuddy.com',
+      password: 'Admin@1234',
+      role: 'SUPER_ADMIN',
+      roleTitle: 'Super Administrator',
+      studentRegNo: 'ADMIN001',
+      phone: '+91 90000 00001',
+      unit: 'All Enterprise Units',
+      subUnit: 'Central Administration',
+      joinedDate: '14-Aug-2026',
+      managedBy: null
+    },
+    {
+      id: 'usr-super-2',
+      name: 'Super Administrator 2',
+      email: 'admin2@cabuddy.com',
+      password: 'Admin@5678',
+      role: 'SUPER_ADMIN',
+      roleTitle: 'Super Administrator',
+      studentRegNo: 'ADMIN002',
+      phone: '+91 90000 00002',
+      unit: 'All Enterprise Units',
+      subUnit: 'Central Administration',
+      joinedDate: '14-Aug-2026',
+      managedBy: null
     }
+  ];
 
-    if (
-      !useMySql ||
-      !pool ||
-      !authBootstrapReady
-    ) {
-      return res.status(503).json({
-        success: false,
-        message:
-          'Authentication service is temporarily unavailable'
-      });
-    }
+  const user = demoAdmins.find(
+    admin =>
+      admin.email.toLowerCase() === input &&
+      admin.password === pass
+  );
 
-    try {
-      const [rows] =
-        await pool.query(
-          `
-          SELECT *
-          FROM users
-          WHERE LOWER(email) = ?
-             OR LOWER(id) = ?
-          LIMIT 1
-          `,
-          [
-            inputLower,
-            inputLower
-          ]
-        );
-
-      const user = rows[0];
-
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          message:
-            'Invalid email/User ID or password'
-        });
-      }
-
-      const passwordValid =
-        await verifyStoredPassword(
-          plainPassword,
-          user.password
-        );
-
-      if (!passwordValid) {
-        return res.status(401).json({
-          success: false,
-          message:
-            'Invalid email/User ID or password'
-        });
-      }
-
-      if (!isBcryptHash(user.password)) {
-        const upgradedHash =
-          await bcrypt.hash(
-            plainPassword,
-            BCRYPT_ROUNDS
-          );
-
-        await pool.query(
-          `
-          UPDATE users
-          SET password = ?
-          WHERE id = ?
-          `,
-          [
-            upgradedHash,
-            user.id
-          ]
-        );
-
-        user.password = upgradedHash;
-      }
-
-      await pool.query(
-        `
-        UPDATE attendance
-        SET
-          active = 0,
-          logoutTime = ?,
-          duration = 'Auto closed on new login'
-        WHERE
-          userId = ?
-          AND active = 1
-        `,
-        [
-          timeStr,
-          user.id
-        ]
-      );
-
-      const activeLog = {
-        id: `log-${Date.now()}`,
-        userId: user.id,
-        userName: user.name,
-        userEmail: user.email,
-
-        managerId:
-          user.managedBy ||
-          (
-            user.role === 'MANAGER'
-              ? 'usr-1'
-              : null
-          ),
-
-        roleTitle:
-          user.roleTitle ||
-          user.role,
-
-        unit:
-          user.unit ||
-          ORGANIZATIONAL_UNITS[0],
-
-        loginTime: timeStr,
-        logoutTime: null,
-        date: dateStr,
-        timeWindow: `${timeStr} - Active`,
-        duration: 'Session Active',
-        active: 1,
-        serverVerified: 1,
-        serverUtcIso: isoStr,
-
-        managerRemarks:
-          `${user.roleTitle || user.role} active in portal.`,
-
-        loginLocation:
-          location
-            ? JSON.stringify(location)
-            : null
-      };
-
-      await pool.query(
-        `
-        INSERT INTO attendance (
-          id,
-          userId,
-          userName,
-          userEmail,
-          managerId,
-          roleTitle,
-          unit,
-          loginTime,
-          logoutTime,
-          date,
-          timeWindow,
-          duration,
-          active,
-          serverVerified,
-          serverUtcIso,
-          managerRemarks,
-          loginLocation
-        )
-        VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?, ?, ?
-        )
-        `,
-        [
-          activeLog.id,
-          activeLog.userId,
-          activeLog.userName,
-          activeLog.userEmail,
-          activeLog.managerId,
-          activeLog.roleTitle,
-          activeLog.unit,
-          activeLog.loginTime,
-          activeLog.logoutTime,
-          activeLog.date,
-          activeLog.timeWindow,
-          activeLog.duration,
-          activeLog.active,
-          activeLog.serverVerified,
-          activeLog.serverUtcIso,
-          activeLog.managerRemarks,
-          activeLog.loginLocation
-        ]
-      );
-
-      if (activeLog.loginLocation) {
-        try {
-          activeLog.loginLocation =
-            JSON.parse(
-              activeLog.loginLocation
-            );
-        } catch {
-          activeLog.loginLocation = null;
-        }
-      }
-
-      return res.json({
-        success: true,
-        user: sanitizeUser(user),
-        serverTimestamp: timeStr,
-        serverDate: dateStr,
-        activeLog
-      });
-    } catch (dbErr) {
-      console.error(
-        'MySQL login error:',
-        dbErr.message
-      );
-
-      return res.status(500).json({
-        success: false,
-        message:
-          IS_PRODUCTION
-            ? 'Unable to complete login'
-            : dbErr.message
-      });
-    }
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid credentials'
+    });
   }
-);
+
+  const { password: _password, ...safeUser } = user;
+
+  const activeLog = {
+    id: `log-${Date.now()}`,
+    userId: user.id,
+    userName: user.name,
+    userEmail: user.email,
+    managerId: null,
+    roleTitle: user.roleTitle,
+    unit: user.unit,
+    loginTime: timeStr,
+    logoutTime: null,
+    date: dateStr,
+    timeWindow: `${timeStr} - Active`,
+    duration: 'Session Active',
+    active: true,
+    serverVerified: true,
+    serverUtcIso: isoStr,
+    managerRemarks: 'Demo Super Admin session active.',
+    loginLocation: location || null
+  };
+
+  return res.json({
+    success: true,
+    user: safeUser,
+    serverTimestamp: timeStr,
+    serverDate: dateStr,
+    activeLog
+  });
+});
 
 // ======================================================
 // LOGOUT
