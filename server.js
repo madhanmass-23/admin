@@ -376,7 +376,7 @@ const DEFAULT_DB = {
     {
       id: 'usr-1',
       name: 'Super Administrator 1',
-      email: 'admin1@cabuddy.demo',
+      email: 'admin1@cabuddy.com',
       password: 'Admin@1234',
       role: 'SUPER_ADMIN',
       roleTitle: 'Super Administrator',
@@ -390,7 +390,7 @@ const DEFAULT_DB = {
     {
       id: 'usr-super-2',
       name: 'Super Administrator 2',
-      email: 'admin2@cabuddy.demo',
+      email: 'admin2@cabuddy.com',
       password: 'Admin@5678',
       role: 'SUPER_ADMIN',
       roleTitle: 'Super Administrator',
