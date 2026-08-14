@@ -3826,11 +3826,10 @@ if (
   );
 }
 
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      `🚀 Centralized Audit Backend running on port ${PORT}`
-    );
-  }
-);
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Centralized Audit Backend running on port ${PORT}`);
+  });
+}
+
+export default app;
