@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './index.css';
 
-
 // API Base URL (Vite proxy maps this to 5001 locally, cPanel serves it directly)
 const API_BASE = '/api';
 
@@ -17,7 +16,31 @@ const ORGANIZATIONAL_UNITS = [
   'Auctions'
 ];
 
-// Available Auditor Staff Roles (Manager Decides)
+// Short Display Titles for Pie Chart Legend to prevent long text overflow
+const SHORT_UNIT_NAMES = [
+  'Procurement [Marketing]',
+  'Warehousing [Marketing]',
+  'Donor Cell & Srivani',
+  'Kalyanakatta Unit',
+  'Annaprasadam Trust',
+  'Sri PAT Temple',
+  'Reception & Halls',
+  'Auctions Wing'
+];
+
+// Color palette for the 8 official units in Pie Chart & UI
+const UNIT_COLORS = [
+  '#2563EB', // Procurement - Royal Blue
+  '#059669', // Warehousing - Emerald Green
+  '#D97706', // Donor cell - Amber Gold
+  '#7C3AED', // Kalyanakatta - Deep Violet
+  '#DB2777', // Annaprasadam - Pink Coral
+  '#0891B2', // Sri PAT - Cyan Teal
+  '#4F46E5', // Reception - Indigo
+  '#EA580C'  // Auctions - Vivid Orange
+];
+
+// Available Auditor Staff Roles
 const AUDITOR_ROLES = [
   'Field Auditor',
   'Junior Auditor',
@@ -26,8 +49,11 @@ const AUDITOR_ROLES = [
   'Compliance Officer'
 ];
 
-// Predefined Audit Work Types for Daily Duty Reporting
+// Predefined Audit Work Types
 const AUDIT_WORK_TYPES = [
+  'Monthly Internal Audit',
+  'Quaterly Internal Audit',
+  'Half-Yearly Internal Audit',
   'Concurrent Audit',
   'Internal Audit & Systems Review',
   'Physical Inventory & Stock Verification',
@@ -38,3751 +64,1890 @@ const AUDIT_WORK_TYPES = [
   'Special Investigation / Surprise Inspection'
 ];
 
-export default function App() {
+const ITEMS_PER_PAGE = 10;
 
-  // ── Auth & Current Session ──
-  const [authView, setAuthView] = useState('signin');
+// ── SVG Donut / Pie Chart Component ──
+function UnitDistributionPieChart({ allRecords }) {
+  const totalCount = allRecords.length || 1;
+
+  const unitStats = ORGANIZATIONAL_UNITS.map((unitName, index) => {
+    const count = allRecords.filter(r => r.field4_unitDetails === unitName).length;
+    const percentage = Math.round((count / totalCount) * 100);
+    return {
+      fullName: unitName,
+      shortName: SHORT_UNIT_NAMES[index] || unitName,
+      count,
+      percentage,
+      color: UNIT_COLORS[index % UNIT_COLORS.length]
+    };
+  });
+
+  let accumulatedAngle = 0;
+  const radius = 60;
+  const circumference = 2 * Math.PI * radius; // ~376.99
+
+  const slices = unitStats.map((stat, i) => {
+    const strokeDasharray = `${(stat.count / totalCount) * circumference} ${circumference}`;
+    const strokeDashoffset = -accumulatedAngle;
+    accumulatedAngle += (stat.count / totalCount) * circumference;
+
+    return (
+      <circle
+        key={i}
+        cx="90"
+        cy="90"
+        r={radius}
+        fill="transparent"
+        stroke={stat.color}
+        strokeWidth="30"
+        strokeDasharray={strokeDasharray}
+        strokeDashoffset={strokeDashoffset}
+        style={{ transition: 'all 0.5s cubic-bezier(0.16, 1, 0.3, 1)' }}
+      />
+    );
+  });
+
+  return (
+    <div className="pie-chart-container">
+      <div className="pie-chart-svg-wrapper">
+        <svg width="180" height="180" viewBox="0 0 180 180" style={{ transform: 'rotate(-90deg)' }}>
+          {slices}
+        </svg>
+        <div className="pie-center-badge">
+          <div className="pie-center-val">{allRecords.length}</div>
+          <div className="pie-center-label">Total Logs</div>
+        </div>
+      </div>
+
+      <div className="unit-grid-numbered">
+        {unitStats.map((stat, i) => (
+          <div key={i} className="unit-number-item" title={`${i + 1}. ${stat.fullName}: ${stat.count} logs (${stat.percentage}%)`}>
+            <span className="unit-num-badge" style={{ background: stat.color }}>{i + 1}</span>
+            <div className="unit-num-info">
+              <span className="unit-num-title">{stat.shortName}</span>
+              <span className="unit-num-stat">{stat.count} ({stat.percentage}%)</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  // ── Auth & Active Session ──
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
-  const [sessionLoginTime, setSessionLoginTime] = useState(null);
-  const [logoutToast, setLogoutToast] = useState(null);
 
-  // ── Daily Audit Duty & Work Reporting Sheet State (The 11 Parameters) ──
-  const [dutyLoginTime, setDutyLoginTime] = useState('09:00:00 AM');
-  const [dutyFullName, setDutyFullName] = useState('');
-  const [dutyStudentRegNo, setDutyStudentRegNo] = useState('');
-  const [dutyUnitDetails, setDutyUnitDetails] = useState(ORGANIZATIONAL_UNITS[0]);
-  const [dutySubUnitDetails, setDutySubUnitDetails] = useState('');
-  const [dutyAuditWorkType, setDutyAuditWorkType] = useState(AUDIT_WORK_TYPES[0]);
-  const [dutyWorkObjective, setDutyWorkObjective] = useState('');
-  const [dutyTargetToAchieve, setDutyTargetToAchieve] = useState('');
-  const [dutyCaRemarks, setDutyCaRemarks] = useState('');
-  const [dutyPocName, setDutyPocName] = useState('');
-  const [dutySubmittedReports, setDutySubmittedReports] = useState([]);
-  const [dutySubmitSuccess, setDutySubmitSuccess] = useState(false);
-  const [dutyVouchersVerified, setDutyVouchersVerified] = useState('');
-  const [dutyActiveTab, setDutyActiveTab] = useState('sheet'); // 'sheet', 'records', 'all_users', 'all_reports', 'all_attendance', 'moms', 'tasks'
+  // ── Primary Admin Navigation ──
+  // 'master_10' = Page 1: All User Activity & 11-Field Duty Log Master Table
+  // 'unit_segregation' = Page 2: Unit-Wise Segregation (8 Official Units Header & Tabs)
+  // 'user_directory' = Page 3: Auditor Directory & Staff Roster
+  const [adminTab, setAdminTab] = useState('master_10');
+  const [selectedUnitTab, setSelectedUnitTab] = useState(ORGANIZATIONAL_UNITS[0]);
 
-  // ── Hub Active Section State ('entry' | 'logout' | 'moms' | 'tasks' | 'all_users') ──
-  const [hubActiveSection, setHubActiveSection] = useState('entry');
+  // ── Role Filter Toggle State (Super Admin Details vs User Details Requirement) ──
+  const [roleFilter, setRoleFilter] = useState('ALL'); // 'ALL' | 'SUPER_ADMIN' | 'USER'
 
-  // ── Dashboard Page View State ('hub' | 'duty_entry' | 'shift_logout' | 'mom_page' | 'task_page') ──
-  const [dashboardView, setDashboardView] = useState('hub');
+  // ── Master Filters & Search ──
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterUnit, setFilterUnit] = useState('ALL');
+  const [filterWorkType, setFilterWorkType] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState('ALL');
 
-  // Sign In form inputs (admin / admin or any user details)
-  const [loginEmail, setLoginEmail] = useState('admin');
-  const [loginPassword, setLoginPassword] = useState('admin');
-  const [showPassword, setShowPassword] = useState(false);
-  const [loginError, setLoginError] = useState('');
+  // ── Pagination State (Strict 10 Items Per Page Requirement) ──
+  const [currentPage1, setCurrentPage1] = useState(1);
+  const [currentPage2, setCurrentPage2] = useState(1);
+  const [modalHistoryPage, setModalHistoryPage] = useState(1);
 
-  // ── MOM (Minutes of Meeting) Modal State (Matching Images 1, 2, 3) ──
-  const [showMomDialog, setShowMomDialog] = useState(false);
-  const [momActiveSubTab, setMomActiveSubTab] = useState('basic'); // 'basic' | 'content' | 'actions'
-  const [momMeetingTitle, setMomMeetingTitle] = useState('Weekly Team Meeting');
-  const [momMeetingType, setMomMeetingType] = useState('Team Meeting');
-  const [momDate, setMomDate] = useState('12/08/2026');
-  const [momTime, setMomTime] = useState('10:30 AM');
-  const [momOrganizer, setMomOrganizer] = useState('Demo Managing Partner');
-  const [momLocation, setMomLocation] = useState('Conference Room A, Zoo Road');
-  const [momAttendees, setMomAttendees] = useState('');
-  const [momAgenda, setMomAgenda] = useState('');
-  const [momDiscussions, setMomDiscussions] = useState('');
-  const [momActionItems, setMomActionItems] = useState('');
-  const [momNextMeeting, setMomNextMeeting] = useState('');
-  const [momsList, setMomsList] = useState([]);
-  const [momSuccessToast, setMomSuccessToast] = useState(false);
-
-  // ── Create New Task Modal State (Matching Image 4) ──
-  const [showTaskDialog, setShowTaskDialog] = useState(false);
-  const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskPriority, setNewTaskPriority] = useState('Medium Priority');
-  const [newTaskDescription, setNewTaskDescription] = useState('');
-  const [newTaskAssignedTo, setNewTaskAssignedTo] = useState('Demo Managing Partner');
-  const [newTaskDueDate, setNewTaskDueDate] = useState('');
-  const [newTaskProject, setNewTaskProject] = useState('');
-  const [newTaskCategory, setNewTaskCategory] = useState('General');
-  const [tasksList, setTasksList] = useState([]);
-  const [taskSuccessToast, setTaskSuccessToast] = useState(false);
-
-  // Master State Stores
+  // ── Master Data Stores ──
   const [usersDb, setUsersDb] = useState([]);
   const [attendanceLedger, setAttendanceLedger] = useState([]);
-  const [_assignmentsDb, setAssignmentsDb] = useState([]);
-  const [_complaintsDb, setComplaintsDb] = useState([]);
+  const [dutySubmittedReports, setDutySubmittedReports] = useState([]);
 
-  // Super Admin Enterprise Directory State
-  const [adminUserSearch, setAdminUserSearch] = useState('');
-  const [adminUserUnitFilter, setAdminUserUnitFilter] = useState('ALL');
-  const [adminUserRoleFilter, setAdminUserRoleFilter] = useState('ALL');
-  const [adminUserStatusFilter, setAdminUserStatusFilter] = useState('ALL');
-  const [selectedUserDetailModal, setSelectedUserDetailModal] = useState(null);
-
-  // Live Server Clock
-  const [currentTimeStr, setCurrentTimeStr] = useState('10:45 AM');
-  const [logoutRemarks, setLogoutRemarks] = useState('');
-
-
-
-  // ── Document Viewer Modal State (Super Admin & Manager & User) ──
-  const [viewingDoc, setViewingDoc] = useState(null);
-
-
-  // ── Manager Role Switcher Modal State ──
-  const [editingRoleUser, setEditingRoleUser] = useState(null);
-  const [selectedRoleTitle, setSelectedRoleTitle] = useState(AUDITOR_ROLES[0]);
-  const [selectedRoleUnit, setSelectedRoleUnit] = useState(ORGANIZATIONAL_UNITS[0]);
-
-  // ── Manager Work Assignment Modal State ──
-  const [showAssignModal, setShowAssignModal] = useState(false);
-  const [assignTargetUserId, setAssignTargetUserId] = useState('');
-  const [assignUnit, setAssignUnit] = useState(ORGANIZATIONAL_UNITS[0]);
-  const [assignTaskTitle, setAssignTaskTitle] = useState('');
-  const [assignInstructions, setAssignInstructions] = useState('');
-  const [assignDeadline, setAssignDeadline] = useState('Today, 05:30 PM');
-
-  // ── Manager User Provisioning Modal State ──
+  // ── Modals & Drawers ──
+  const [inspecting11FieldRecord, setInspecting11FieldRecord] = useState(null);
   const [showCreateUserModal, setShowCreateUserModal] = useState(false);
+  const [showAdminProfileModal, setShowAdminProfileModal] = useState(false);
+  const [editingUserRole, setEditingUserRole] = useState(null);
+
+  // Form Inputs
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('1234567');
   const [newUserRoleTitle, setNewUserRoleTitle] = useState('Field Auditor');
-  const [newUserUnit, setNewUserUnit] = useState(ORGANIZATIONAL_UNITS[0]);
+  const [newUserUnits, setNewUserUnits] = useState([ORGANIZATIONAL_UNITS[0], ORGANIZATIONAL_UNITS[1]]);
 
-  // Forgot Password Modal
+  const [loginEmail, setLoginEmail] = useState('admin');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
 
-  const [showForgotModal, setShowForgotModal] = useState(false);
-  const [recoveryEmail, setRecoveryEmail] = useState('');
-  const [recoverySuccess, setRecoverySuccess] = useState(false);
+  // ── Mandatory GPS Location Guard State ──
+  const [adminLocation, setAdminLocation] = useState(null);
+  const [isLocationGranted, setIsLocationGranted] = useState(false);
+  const [isCheckingLocation, setIsCheckingLocation] = useState(true);
+  const [locationError, setLocationError] = useState('');
 
-  // ── Universal In-App Mobile Unit Picker Modal (Fixes OS Dropdown Overflows) ──
-  const [unitPickerModal, setUnitPickerModal] = useState(null);
+  const requestLocationAccess = () => {
+    setIsCheckingLocation(true);
+    setLocationError('');
 
-  // ── Right Bottom Corner Widget State & 4-Sections Modals ──
-  const [isWidgetOpen, setIsWidgetOpen] = useState(false);
-  const [showQuickLoginModal, setShowQuickLoginModal] = useState(false);
-  const [showMumModal, setShowMumModal] = useState(false);
-  const [mumTab, setMumTab] = useState('units_matrix'); // 'units_matrix', 'log_minutes', 'records'
-  const [mumMinutesUnit, setMumMinutesUnit] = useState(ORGANIZATIONAL_UNITS[0]);
-  const [mumAgenda, setMumAgenda] = useState('');
-  const [mumDecisions, setMumDecisions] = useState('');
-  const [mumActionOwner, setMumActionOwner] = useState('');
-  const [mumDueDate, setMumDueDate] = useState('End of Month');
-  const [mumSubmitSuccess, setMumSubmitSuccess] = useState(false);
-  const [mumRecords, setMumRecords] = useState([
-    {
-      id: 'mum-1',
-      unit: 'Auctions',
-      agenda: 'Monthly Concurrent Token & Voucher Discrepancy Reconciliation',
-      decisions: 'Adopted dual physical count protocol for daily token drawers. Audit compliance verified.',
-      actionOwner: 'Ravi Teja (Auditor) & Suresh N. (Manager)',
-      date: '12-Aug-2026',
-      status: 'COMPLIANT'
-    },
-    {
-      id: 'mum-2',
-      unit: 'Procurement [Marketing Department]',
-      agenda: 'Tender Bidder Envelope Verification & Seal Integrity Review',
-      decisions: 'Implemented tamper-evident barcode seal on incoming tender boxes. Escalation documented.',
-      actionOwner: 'Kiran Reddy, Lead Auditor',
-      date: '11-Aug-2026',
-      status: 'UNDER_REVIEW'
-    },
-    {
-      id: 'mum-3',
-      unit: 'Annaprasadam Trust and Canteens TML & TPT',
-      agenda: 'Cold Storage Thermograph Log & Temperature Baseline Audit',
-      decisions: 'Calibrated sensory temperature logger units across both TML and TPT canteens.',
-      actionOwner: 'Manoj Varma, Compliance Inspector',
-      date: '10-Aug-2026',
-      status: 'COMPLIANT'
-    },
-    {
-      id: 'mum-4',
-      unit: 'Donor cell along with Concurrent audit on donation of all allied trusts and Srivani Trust Receipts [Tirumali]',
-      agenda: 'Srivani Trust Donation Digital Receipt & Concurrent Register Review',
-      decisions: 'Confirmed 100% matched reconciliation between electronic gateway receipts and bank deposit slips.',
-      actionOwner: 'Auditor Compliance Cell',
-      date: '08-Aug-2026',
-      status: 'COMPLIANT'
+    if (!navigator.geolocation) {
+      const fallback = {
+        lat: '13.628800',
+        lng: '79.419200',
+        accuracy: 15,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        mapsUrl: 'https://maps.google.com/?q=13.6288,79.4192',
+        note: 'TTD Executive Audit Center'
+      };
+      setAdminLocation(fallback);
+      setIsLocationGranted(true);
+      setIsCheckingLocation(false);
+      return;
     }
-  ]);
 
-  // ── Progressive Web App (PWA) Install State ──
-
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [isPwaInstallable, setIsPwaInstallable] = useState(false);
-  const [showPwaModal, setShowPwaModal] = useState(false);
-
-  useEffect(() => {
-    const handleBeforeInstall = (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setIsPwaInstallable(true);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
-
-    window.addEventListener('appinstalled', () => {
-      setIsPwaInstallable(false);
-      setDeferredPrompt(null);
-      console.log('✅ CA Buddy PWA successfully installed!');
-    });
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
-    };
-  }, []);
-
-  const handleInstallClick = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setIsPwaInstallable(false);
-      }
-      setDeferredPrompt(null);
-    } else {
-      setShowPwaModal(true);
-    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const loc = {
+          lat: position.coords.latitude.toFixed(6),
+          lng: position.coords.longitude.toFixed(6),
+          accuracy: Math.round(position.coords.accuracy),
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          mapsUrl: `https://maps.google.com/?q=${position.coords.latitude},${position.coords.longitude}`,
+          note: 'Live GPS Sensor'
+        };
+        setAdminLocation(loc);
+        setIsLocationGranted(true);
+        setIsCheckingLocation(false);
+      },
+      (err) => {
+        console.warn('Geolocation permission error:', err.message);
+        setIsLocationGranted(false);
+        setIsCheckingLocation(false);
+        setLocationError('Location permissions are disabled in your browser. Please allow location access to continue.');
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
-  // ── Live Backend Data Fetching ──
+  const [currentTimeStr, setCurrentTimeStr] = useState('');
 
+  useEffect(() => {
+    requestLocationAccess();
+  }, []);
+
+  useEffect(() => {
+    const updateClock = () => {
+      const now = new Date();
+      setCurrentTimeStr(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    };
+    updateClock();
+    const interval = setInterval(updateClock, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    setCurrentPage1(1);
+  }, [searchQuery, filterUnit, filterWorkType, filterStatus, roleFilter]);
+
+  useEffect(() => {
+    setCurrentPage2(1);
+  }, [selectedUnitTab]);
+
+  useEffect(() => {
+    setModalHistoryPage(1);
+  }, [inspecting11FieldRecord]);
+
+  // ── Fetch Master Backend Data ──
   const refreshAllData = useCallback(async () => {
     try {
-      const [usersRes, attRes, asnRes, cmpRes, dutyRes, momsRes, tasksRes] = await Promise.all([
+      const [usersRes, attRes, dutyRes] = await Promise.all([
         fetch(`${API_BASE}/users`),
         fetch(`${API_BASE}/attendance`),
-        fetch(`${API_BASE}/assignments`),
-        fetch(`${API_BASE}/complaints`),
-        fetch(`${API_BASE}/daily-reports`),
-        fetch(`${API_BASE}/moms`),
-        fetch(`${API_BASE}/tasks`)
+        fetch(`${API_BASE}/daily-reports`)
       ]);
 
-      const usersData = await usersRes.json();
-      if (usersData.success) setUsersDb(usersData.users);
+      if (usersRes.ok) {
+        const usersData = await usersRes.json();
+        if (usersData.success) setUsersDb(usersData.users || []);
+      }
 
-      const attData = await attRes.json();
-      if (attData.success) setAttendanceLedger(attData.attendance);
+      if (attRes.ok) {
+        const attData = await attRes.json();
+        if (attData.success) setAttendanceLedger(attData.attendance || []);
+      }
 
-      const asnData = await asnRes.json();
-      if (asnData.success) setAssignmentsDb(asnData.assignments);
-
-      const cmpData = await cmpRes.json();
-      if (cmpData.success) setComplaintsDb(cmpData.complaints);
-
-      const dutyData = await dutyRes.json();
-      if (dutyData.success && dutyData.reports) setDutySubmittedReports(dutyData.reports);
-
-      const momsData = await momsRes.json();
-      if (momsData.success && momsData.moms) setMomsList(momsData.moms);
-
-      const tasksData = await tasksRes.json();
-      if (tasksData.success && tasksData.tasks) setTasksList(tasksData.tasks);
-
+      if (dutyRes.ok) {
+        const dutyData = await dutyRes.json();
+        if (dutyData.success && dutyData.reports) setDutySubmittedReports(dutyData.reports || []);
+      }
     } catch (err) {
       console.warn('Backend API sync notice:', err);
     }
   }, []);
 
-
   useEffect(() => {
     refreshAllData();
+    const interval = setInterval(refreshAllData, 5000);
+    return () => clearInterval(interval);
   }, [refreshAllData]);
 
-  // Real-time server clock ticker
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setCurrentTimeStr(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  // ── Combined 11-Field Duty Log Records Master Pipeline ──
+  const getAll11FieldRecords = useCallback(() => {
+    const records = [];
 
-  // Quick Demo Role Switcher
-  const handleSelectDemoRole = (roleKey) => {
-    if (roleKey === 'SUPER_ADMIN') {
-      setLoginEmail('admin@eluc');
-      setLoginPassword('1234567');
-    } else if (roleKey === 'MANAGER') {
-      setLoginEmail('manager@eluc');
-      setLoginPassword('1234567');
-    } else {
-      setLoginEmail('auditor@eluc');
-      setLoginPassword('1234567');
-    }
-  };
-
-  // Instant 1-Click Login from Quick Login Widget / Modal
-  const handleQuickLoginRole = async (roleKey) => {
-    handleSelectDemoRole(roleKey);
-    let targetEmail = 'admin@eluc';
-    let targetPwd = '1234567';
-    if (roleKey === 'MANAGER') {
-      targetEmail = 'manager@eluc';
-      targetPwd = '1234567';
-    } else if (roleKey === 'USER') {
-      targetEmail = 'auditor@eluc';
-      targetPwd = '1234567';
-    }
-    setLoginEmail(targetEmail);
-    setLoginPassword(targetPwd);
-    setShowQuickLoginModal(false);
-
-    try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: targetEmail, password: targetPwd })
+    dutySubmittedReports.forEach((rep, idx) => {
+      records.push({
+        id: rep.id || `rep-${idx}`,
+        source: 'Daily Duty Report',
+        field1_loginTime: rep.loginTime || '—',
+        field2_fullName: rep.fullName || rep.userName || '—',
+        field3_studentRegNo: rep.studentRegNo || '—',
+        field4_unitDetails: rep.unitDetails || rep.unit || '—',
+        field5_subUnitDetails: rep.subUnitDetails || '—',
+        field6_auditWorkType: rep.auditWorkType || '—',
+        field7_workObjective: rep.workObjective || rep.detailedDescription || '—',
+        field8_workToBeAchieved: rep.targetToAchieve || rep.status || '—',
+        field9_caRemarks: rep.caRemarks || rep.keyEscalations || '—',
+        field10_pocName: rep.pocName || '—',
+        field11_logoutTime: rep.logoutTime || 'Session Active',
+        rawDate: rep.date || '—',
+        loginLocation: rep.loginLocation || null,
+        logoutLocation: rep.logoutLocation || null,
+        rawRecord: rep
       });
-      const data = await res.json();
-
-      if (data.success) {
-        setCurrentUser(data.user);
-        setIsLoggedIn(true);
-        setSessionLoginTime(data.serverTimestamp);
-        if (data.user.role === 'SUPER_ADMIN') {
-          setDutyActiveTab('all_users');
-        } else {
-          setDutyActiveTab('sheet');
-        }
-        refreshAllData();
-      }
-    } catch (err) {
-      console.error('Quick login error:', err);
-    }
-  };
-
-  // Helper: Capture GPS Location with High Accuracy (enableHighAccuracy tries for < 5m accuracy)
-  const getGpsLocation = () => {
-    return new Promise((resolve) => {
-      if (typeof navigator === 'undefined' || !navigator.geolocation) {
-        resolve(null);
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          resolve({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            accuracy: position.coords.accuracy
-          });
-        },
-        (error) => {
-          console.warn('GPS location capture warning:', error.message);
-          resolve(null);
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 8000,
-          maximumAge: 0
-        }
-      );
     });
+
+    attendanceLedger.forEach((att, idx) => {
+      if (!records.some(r => r.id === att.id)) {
+        records.push({
+          id: att.id || `att-${idx}`,
+          source: 'Shift Log Sheet',
+          field1_loginTime: att.loginTime || '—',
+          field2_fullName: att.userName || '—',
+          field3_studentRegNo: att.userRegNo || '—',
+          field4_unitDetails: att.unit || '—',
+          field5_subUnitDetails: att.subUnitDetails || '—',
+          field6_auditWorkType: att.auditWorkType || '—',
+          field7_workObjective: att.detailedDescription || '—',
+          field8_workToBeAchieved: att.active ? 'In Progress' : 'Completed Shift Work',
+          field9_caRemarks: att.keyEscalations || att.managerRemarks || '—',
+          field10_pocName: '—',
+          field11_logoutTime: att.logoutTime || 'Session Active',
+          rawDate: att.date || '—',
+          loginLocation: att.loginLocation || null,
+          logoutLocation: att.logoutLocation || null,
+          rawRecord: att
+        });
+      }
+    });
+
+    return records;
+  }, [dutySubmittedReports, attendanceLedger]);
+
+  const all11Records = getAll11FieldRecords();
+
+  // Filter master 11-field records for Page 1 with Role Toggle Filter
+  const filteredPage1Records = all11Records.filter(rec => {
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = !query ||
+      rec.field2_fullName.toLowerCase().includes(query) ||
+      rec.field3_studentRegNo.toLowerCase().includes(query) ||
+      rec.field4_unitDetails.toLowerCase().includes(query) ||
+      rec.field6_auditWorkType.toLowerCase().includes(query) ||
+      rec.field7_workObjective.toLowerCase().includes(query);
+
+    const matchesUnit = filterUnit === 'ALL' || rec.field4_unitDetails === filterUnit;
+    const matchesWorkType = filterWorkType === 'ALL' || rec.field6_auditWorkType === filterWorkType;
+    const matchesStatus = filterStatus === 'ALL' || rec.field8_workToBeAchieved.toLowerCase().includes(filterStatus.toLowerCase());
+
+    const isSuperAdmin = rec.field2_fullName.toLowerCase().includes('admin');
+    const matchesRole = roleFilter === 'ALL' || (roleFilter === 'SUPER_ADMIN' ? isSuperAdmin : !isSuperAdmin);
+
+    return matchesSearch && matchesUnit && matchesWorkType && matchesStatus && matchesRole;
+  });
+
+  // Page 1 Pagination (10 Items Per Page)
+  const totalPage1Pages = Math.ceil(filteredPage1Records.length / ITEMS_PER_PAGE) || 1;
+  const paginatedPage1Records = filteredPage1Records.slice(
+    (currentPage1 - 1) * ITEMS_PER_PAGE,
+    currentPage1 * ITEMS_PER_PAGE
+  );
+
+  // Page 2 records segregated strictly by selectedUnitTab
+  const page2UnitRecords = all11Records.filter(rec => rec.field4_unitDetails === selectedUnitTab);
+  const page2UnitAuditors = usersDb.filter(u => u.unit === selectedUnitTab || selectedUnitTab.includes(u.unit));
+
+  // Page 2 Pagination (10 Items Per Page)
+  const totalPage2Pages = Math.ceil(page2UnitRecords.length / ITEMS_PER_PAGE) || 1;
+  const paginatedPage2Records = page2UnitRecords.slice(
+    (currentPage2 - 1) * ITEMS_PER_PAGE,
+    currentPage2 * ITEMS_PER_PAGE
+  );
+
+  // ── Build Multi-Month Historical Shift Timeline for any Auditor Modal View ──
+  const getAuditorHistoryTenure = (record) => {
+    if (!record) return [];
+
+    const directMatches = all11Records.filter(
+      r => r.field2_fullName.toLowerCase() === record.field2_fullName.toLowerCase() ||
+        r.field3_studentRegNo === record.field3_studentRegNo
+    );
+
+    return directMatches;
   };
 
-  // 1. Backend Login (Captures Login Timestamp for ANY role)
-  const handleSignIn = async (e) => {
-    if (e) e.preventDefault();
+  const selectedAuditorHistory = getAuditorHistoryTenure(inspecting11FieldRecord);
+  const totalModalHistoryPages = Math.ceil(selectedAuditorHistory.length / ITEMS_PER_PAGE) || 1;
+  const paginatedModalHistory = selectedAuditorHistory.slice(
+    (modalHistoryPage - 1) * ITEMS_PER_PAGE,
+    modalHistoryPage * ITEMS_PER_PAGE
+  );
+
+  // Handle Login Form Submit
+  const handleLoginSubmit = async (e) => {
+    e.preventDefault();
     setLoginError('');
 
-    const location = await getGpsLocation();
+    if (!adminLocation) {
+      requestLocationAccess();
+      setLoginError('Location is required before signing in. Allow GPS access and try again.');
+      return;
+    }
 
     try {
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword, location })
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+          location: {
+            latitude: Number(adminLocation.lat),
+            longitude: Number(adminLocation.lng),
+            accuracyMeters: Number(adminLocation.accuracy)
+          }
+        })
       });
-      
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        setLoginError(errData.message || 'Invalid login credentials.');
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setLoginError(data.message || data.error || 'Invalid credentials');
         return;
       }
 
-      const data = await res.json();
-
-      if (data.success) {
-        setCurrentUser(data.user);
-        setIsLoggedIn(true);
-        setSessionLoginTime(data.serverTimestamp);
-        if (data.user.role === 'SUPER_ADMIN') {
-          setDutyActiveTab('all_users');
-        } else {
-          setDutyActiveTab('sheet');
-        }
-        refreshAllData();
-      } else {
-        setLoginError(data.message || 'Authentication failed.');
-      }
+      setCurrentUser(data.user);
+      setIsLoggedIn(true);
+      await refreshAllData();
     } catch (err) {
-      console.error('Login error:', err);
-      setLoginError('Server connection error. Please ensure the backend is running.');
+      console.error('Admin login failed:', err);
+      setLoginError('Error connecting to backend API');
     }
   };
 
-  // 2. Backend Logout (Records Server Authoritative Exit Timestamp & Concludes Single Daily Sheet)
-  const handleLogout = async () => {
-    let recordedTime = currentTimeStr;
-    const location = await getGpsLocation();
+  const handleAdminLogout = async () => {
     try {
-      if (currentUser) {
-        const res = await fetch(`${API_BASE}/auth/logout`, {
+      if (currentUser?.id) {
+        await fetch(`${API_BASE}/auth/logout`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
+          body: JSON.stringify({
             userId: currentUser.id,
-            logoutRemarks: logoutRemarks.trim(),
-            location
+            fullName: currentUser.fullName || currentUser.name || '',
+            studentRegNo: currentUser.studentRegNo || currentUser.registrationNo || '',
+            unitDetails: currentUser.unit || '',
+            location: adminLocation
+              ? {
+                latitude: Number(adminLocation.lat),
+                longitude: Number(adminLocation.lng),
+                accuracyMeters: Number(adminLocation.accuracy)
+              }
+              : null
           })
         });
-        const data = await res.json();
-        if (data.success) {
-          recordedTime = data.serverLogoutTime;
-          if (data.reports) setDutySubmittedReports(data.reports);
-          if (data.attendance) setAttendanceLedger(data.attendance);
-        }
       }
     } catch (err) {
-      console.error('Logout error:', err);
-    }
-
-    // Show Brief Server Stamped Confirmation Toast
-    setIsWidgetOpen(false);
-    setLogoutToast({
-      time: recordedTime,
-      userName: currentUser?.name || 'User'
-    });
-
-
-    setTimeout(() => {
-      setLogoutToast(null);
-      setIsLoggedIn(false);
+      console.error('Admin logout sync failed:', err);
+    } finally {
       setCurrentUser(null);
-      setSessionLoginTime(null);
-      setAuthView('signin');
-      refreshAllData();
-    }, 1200);
-  };
-
-  // ── Auto-Populate Duty Parameters on Login ──
-  useEffect(() => {
-    if (currentUser) {
-      setDutyFullName(currentUser.name || 'Audit Articled Assistant');
-      setDutyStudentRegNo(currentUser.studentRegNo || 'SRO' + Math.floor(100000 + Math.random() * 900000));
-      if (currentUser.unit && currentUser.unit !== 'All Enterprise Units') {
-        setDutyUnitDetails(currentUser.unit);
-      }
-      setMomOrganizer(currentUser.name || 'Demo Managing Partner');
-      setNewTaskAssignedTo(currentUser.name || 'Demo Managing Partner');
-    }
-    if (sessionLoginTime) {
-      setDutyLoginTime(sessionLoginTime);
-    } else {
-      setDutyLoginTime(currentTimeStr);
-    }
-  }, [currentUser, sessionLoginTime, currentTimeStr]);
-
-  // ── Submit Daily Audit Duty Entry (10 Parameters - Login Time Auto Captured) ──
-  const handleSaveDutyReport = async (shouldLogout = false) => {
-    const payload = {
-      userId: currentUser?.id,
-      loginTime: dutyLoginTime || currentTimeStr,
-      fullName: dutyFullName.trim() || currentUser?.name || 'Audit Student',
-      studentRegNo: dutyStudentRegNo.trim() || 'SRO0684920',
-      unitDetails: dutyUnitDetails,
-      subUnitDetails: dutySubUnitDetails.trim() || 'General Unit Counter',
-      auditWorkType: dutyAuditWorkType,
-      workObjective: dutyWorkObjective.trim(),
-      vouchersVerified: dutyVouchersVerified,
-      targetToAchieve: dutyTargetToAchieve.trim(),
-      caRemarks: dutyCaRemarks.trim(),
-      pocName: dutyPocName.trim(),
-      logoutTime: shouldLogout ? currentTimeStr : null,
-      status: shouldLogout ? 'COMPLETED & LOGGED OUT' : 'SUBMITTED'
-    };
-
-    try {
-      const res = await fetch(`${API_BASE}/daily-reports`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (data.success && data.reports) {
-        setDutySubmittedReports(data.reports);
-      } else {
-        setDutySubmittedReports(prev => [payload, ...prev]);
-      }
-    } catch (err) {
-      console.warn('Save daily report local fallback:', err);
-      setDutySubmittedReports(prev => [payload, ...prev]);
-    }
-
-    setDutySubmitSuccess(true);
-
-    if (shouldLogout) {
-      setTimeout(() => {
-        handleLogout();
-      }, 1200);
-    } else {
-      setTimeout(() => {
-        setDutySubmitSuccess(false);
-      }, 3500);
+      setIsLoggedIn(false);
+      setLoginPassword('');
     }
   };
 
-  // ── Save Minutes of Meeting (MOM - Matching Images 1, 2, 3) ──
-  const handleSaveMom = async (e) => {
-    if (e) e.preventDefault();
-    if (!momMeetingTitle.trim()) return;
-
-    const payload = {
-      meetingTitle: momMeetingTitle.trim(),
-      meetingType: momMeetingType,
-      date: momDate || new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-      time: momTime || currentTimeStr,
-      organizer: momOrganizer.trim() || (currentUser?.name || 'Demo Managing Partner'),
-      location: momLocation.trim() || 'Conference Room A, Main Building',
-      attendees: momAttendees.trim(),
-      agenda: momAgenda.trim(),
-      discussions: momDiscussions.trim(),
-      actionItems: momActionItems.trim(),
-      nextMeeting: momNextMeeting.trim(),
-      authorId: currentUser?.id
-    };
-
-    try {
-      const res = await fetch(`${API_BASE}/moms`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (data.success && data.moms) {
-        setMomsList(data.moms);
-      } else {
-        setMomsList(prev => [payload, ...prev]);
-      }
-    } catch (err) {
-      console.warn('Save MOM local fallback:', err);
-      setMomsList(prev => [payload, ...prev]);
-    }
-
-    setMomSuccessToast(true);
-    setTimeout(() => {
-      setMomSuccessToast(false);
-      setShowMomDialog(false);
-    }, 1200);
-  };
-
-  // ── Create New Task (Matching Image 4) ──
-  const handleCreateTask = async (e) => {
-    if (e) e.preventDefault();
-    if (!newTaskTitle.trim()) return;
-
-    const payload = {
-      taskTitle: newTaskTitle.trim(),
-      priority: newTaskPriority,
-      description: newTaskDescription.trim(),
-      assignedTo: newTaskAssignedTo.trim() || (currentUser?.name || 'Demo Managing Partner'),
-      dueDate: newTaskDueDate || 'Today, 05:30 PM',
-      project: newTaskProject.trim(),
-      category: newTaskCategory,
-      createdById: currentUser?.id,
-      createdByName: currentUser?.name || 'Staff Member'
-    };
-
-    try {
-      const res = await fetch(`${API_BASE}/tasks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (data.success && data.tasks) {
-        setTasksList(data.tasks);
-      } else {
-        setTasksList(prev => [payload, ...prev]);
-      }
-    } catch (err) {
-      console.warn('Create task local fallback:', err);
-      setTasksList(prev => [payload, ...prev]);
-    }
-
-    setTaskSuccessToast(true);
-    setTimeout(() => {
-      setTaskSuccessToast(false);
-      setShowTaskDialog(false);
-      setNewTaskTitle('');
-      setNewTaskDescription('');
-      setNewTaskDueDate('');
-      setNewTaskProject('');
-    }, 1200);
-  };
-
-
-
-
-
-
-  // 6. MANAGER DECIDES & UPDATES USER ROLE
-  const handleSaveUserRole = async (e) => {
+  // Handle Create New Auditor Account Form Submit
+  const handleCreateUserSubmit = async (e) => {
     e.preventDefault();
-    if (!editingRoleUser) return;
-
-    try {
-      const res = await fetch(`${API_BASE}/users/${editingRoleUser.id}/role`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roleTitle: selectedRoleTitle,
-          unit: selectedRoleUnit
-        })
-      });
-      const data = await res.json();
-
-      if (data.success) {
-        setEditingRoleUser(null);
-        refreshAllData();
-      }
-    } catch (err) {
-      console.error('Role update error:', err);
+    if (!newUserName.trim() || !newUserEmail.trim()) {
+      alert('Please provide a valid Auditor Name and Email address.');
+      return;
     }
-  };
 
-  // 7. Dispatch Task / Create Assignment (Universal Support for All Roles)
-  const handleCreateAssignment = async (e) => {
-    if (e) e.preventDefault();
-    if (!assignTaskTitle.trim()) return;
-
-    try {
-      const fallbackUser = usersDb.find(u => u.role === 'USER') || usersDb[0] || { id: 'usr-3', name: 'Field Auditor' };
-      const targetUser = usersDb.find(u => u.id === assignTargetUserId) || fallbackUser;
-      const effectiveManagerId = currentUser?.id || 'usr-2';
-
-      const res = await fetch(`${API_BASE}/assignments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assignedToId: targetUser.id,
-          managerId: effectiveManagerId,
-          unit: assignUnit,
-          taskTitle: assignTaskTitle.trim(),
-          instructions: assignInstructions.trim() || 'Verify physical compliance and upload evidence document.',
-          deadline: assignDeadline
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setShowAssignModal(false);
-        setAssignTaskTitle('');
-        setAssignInstructions('');
-        refreshAllData();
-      }
-    } catch (err) {
-      console.error('Assignment error:', err);
-    }
-  };
-
-  // 7b. MUM (Monthly Unit Monitoring) Minutes Saver
-  const handleSaveMumMinutes = (e) => {
-    if (e) e.preventDefault();
-    if (!mumAgenda.trim()) return;
-
-    const newRecord = {
-      id: `mum-${Date.now()}`,
-      unit: mumMinutesUnit,
-      agenda: mumAgenda.trim(),
-      decisions: mumDecisions.trim() || 'All action items and concurrent audit queries reviewed in monthly committee.',
-      actionOwner: mumActionOwner.trim() || (currentUser?.name || 'Department Manager'),
-      date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-      dueDate: mumDueDate,
-      status: 'COMPLIANT'
-    };
-
-    setMumRecords(prev => [newRecord, ...prev]);
-    setMumSubmitSuccess(true);
-
-    setTimeout(() => {
-      setMumSubmitSuccess(false);
-      setMumTab('records');
-      setMumAgenda('');
-      setMumDecisions('');
-      setMumActionOwner('');
-    }, 1200);
-  };
-
-  // Provision New User
-  const handleCreateUser = async (e) => {
-
-    e.preventDefault();
-    if (!newUserName || !newUserEmail) return;
+    const unitString = Array.isArray(newUserUnits) && newUserUnits.length > 0
+      ? newUserUnits.join(', ')
+      : ORGANIZATIONAL_UNITS[0];
 
     try {
       const res = await fetch(`${API_BASE}/users`, {
-
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: newUserName.trim(),
-          email: newUserEmail.trim().toLowerCase(),
+          email: newUserEmail.trim(),
           password: newUserPassword || '1234567',
           roleTitle: newUserRoleTitle,
-          unit: newUserUnit,
-          managerId: currentUser?.role === 'MANAGER' ? currentUser.id : 'usr-1'
+          unit: unitString,
+          managerId: currentUser?.id || 'usr-1'
         })
       });
+
       const data = await res.json();
       if (data.success) {
+        alert(`✅ New Auditor Account Provisioned Successfully!\n\nName: ${newUserName}\nEmail: ${newUserEmail}\nRole: ${newUserRoleTitle}\nAssigned Units:\n• ${newUserUnits.join('\n• ')}`);
         setShowCreateUserModal(false);
         setNewUserName('');
         setNewUserEmail('');
+        setNewUserPassword('1234567');
+        setNewUserRoleTitle('Field Auditor');
+        setNewUserUnits([ORGANIZATIONAL_UNITS[0], ORGANIZATIONAL_UNITS[1]]);
         refreshAllData();
+      } else {
+        alert(`⚠️ Failed to provision user: ${data.error || 'Database rejected entry'}`);
       }
     } catch (err) {
-      console.error('User create error:', err);
+      console.error('Create auditor failed:', err);
+      alert(`⚠️ Failed to provision user: ${err.message || 'Backend unavailable'}`);
     }
   };
 
-  return (
-    <div className="webapp-shell">
+  // Handle Delete / Remove Auditor Account
+  const handleDeleteUser = async (userObj) => {
+    if (!userObj) return;
+    if (userObj.role === 'SUPER_ADMIN' || userObj.email === 'admin') {
+      alert('⚠️ Security Protection: Primary Super Admin account cannot be deleted.');
+      return;
+    }
 
-      
-      {/* ── Sticky Top Web App Navigation Bar ── */}
-      <header className="webapp-navbar">
-        <div className="webapp-navbar-inner">
-          <div className="webapp-brand-left">
-            <div className="brand-emblem-mini">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2v4M4.93 10.93a7 7 0 1 0 9.9 0L12 8l-2.83 2.93z" />
-                <path d="M9 18h6M10 22h4" />
-              </svg>
-            </div>
-            <div className="brand-name-group">
-              <span className="brand-title">CA Buddy</span>
-              <span className="brand-sub">Enterprise Audit & Robot Vault</span>
-            </div>
+    const confirmDelete = window.confirm(
+      `🚫 DISABLE AUDITOR ACCOUNT?\n\nDisable "${userObj.name}" (${userObj.email})?\n\nThe account will lose access, while historical audit records remain preserved.`
+    );
+    if (!confirmDelete) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/users/${userObj.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        alert(`✅ Auditor Account Disabled: ${userObj.name}`);
+        setUsersDb(prev => prev.filter(u => u.id !== userObj.id));
+        setEditingUserRole(null);
+        refreshAllData();
+      } else {
+        alert(`⚠️ Failed to remove auditor: ${data.error || 'Database rejected request'}`);
+      }
+    } catch (err) {
+      console.error('Disable auditor failed:', err);
+      alert(`⚠️ Failed to disable auditor: ${err.message || 'Backend unavailable'}`);
+    }
+  };
+
+  // CSV Export Utility for exact 11 fields
+  const exportRecordsToCsv = (recordsToExport, filenamePrefix = 'TTD_Audit_11Field_Report') => {
+    if (!recordsToExport || recordsToExport.length === 0) {
+      alert('No data records available to export.');
+      return;
+    }
+    const headers = [
+      '1. Login Time',
+      '2. Full Name',
+      '3. Student Registration No.',
+      '4. TTD Audit Unit Details attending today',
+      '5. TTD Audit Sub-Unit Details attending today',
+      '6. Type of audit work done for',
+      '7. Today\'s work Objective',
+      '8. Todays \'s work to be achieved by end of day',
+      '9. Remarks that you need the CA heading audit/management team of audit the to know',
+      '10. Point of Contact Name[ POC ] within the unit',
+      '11. Logout Time',
+      'Date'
+    ];
+
+    const rows = recordsToExport.map(r => [
+      `"${r.field1_loginTime}"`,
+      `"${r.field2_fullName}"`,
+      `"${r.field3_studentRegNo}"`,
+      `"${r.field4_unitDetails}"`,
+      `"${r.field5_subUnitDetails}"`,
+      `"${r.field6_auditWorkType}"`,
+      `"${(r.field7_workObjective || '').replace(/"/g, '""')}"`,
+      `"${(r.field8_workToBeAchieved || '').replace(/"/g, '""')}"`,
+      `"${(r.field9_caRemarks || '').replace(/"/g, '""')}"`,
+      `"${(r.field10_pocName || '').replace(/"/g, '""')}"`,
+      `"${r.field11_logoutTime}"`,
+      `"${r.rawDate}"`
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `${filenamePrefix}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Mandatory Location Access Guard Screen (First enable location, then portal appears)
+  if (!isLocationGranted) {
+    return (
+      <div className="admin-panel-shell" style={{ justifyContent: 'center', alignItems: 'center', background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 100%)', padding: '2rem' }}>
+        <div style={{ background: '#FFFFFF', borderRadius: '24px', padding: '2.5rem', width: '100%', maxWidth: '440px', boxShadow: '0 25px 50px rgba(0, 0, 0, 0.35)', textAlign: 'center' }}>
+          <div style={{ width: '68px', height: '68px', background: '#EFF6FF', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.25rem', fontSize: '2rem', border: '1.5px solid #BFDBFE' }}>
+            📍
           </div>
-
-          <div className="webapp-nav-controls">
-            <div className="nav-aux-group">
-              <div className="live-clock-pill">
-                <span className="pulse-dot-live"></span>
-                <span>{currentTimeStr}</span>
-              </div>
-            </div>
-
-            {isLoggedIn && (
-              <div className="nav-user-auth-group">
-                {/* PWA Install Button */}
-                <button 
-                  type="button"
-                  className="btn-pwa-install"
-                  onClick={handleInstallClick}
-                  title="Install CA Buddy as Desktop / Mobile App"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="7 10 12 15 17 10"/>
-                    <line x1="12" y1="15" x2="12" y2="3"/>
-                  </svg>
-                  <span>Install App</span>
-                  {isPwaInstallable && (
-                    <span className="pulse-dot-live" style={{ background: '#FACC15', width: 6, height: 6, marginLeft: 2 }} />
-                  )}
-                </button>
-
-                <button 
-                  className="dash-logout-corner" 
-                  onClick={handleLogout}
-                  title="End Session & Record Logout Timestamp"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-                  </svg>
-                  <span>Log Out</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-        </div>
-      </header>
-
-      {/* ── Main Web App Body Area ── */}
-      <main className="webapp-main-content">
-
-        {!isLoggedIn ? (
-          authView === 'signin' ? (
-            /* ═══════════════════════════════════════════════════════
-               ── SIGN IN SCREEN (CENTERED WEB APP CARD) ──
-               ═══════════════════════════════════════════════════════ */
-            <div className="webapp-auth-center">
-              <div className="brand-top-header" style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
-                <img 
-                  src="/calogo.png" 
-                  alt="CA Buddy Logo" 
-                  style={{ width: '80px', height: '80px', objectFit: 'contain', display: 'block', margin: '0 auto' }} 
-                />
-              </div>
-
-
-              <h1 className="auth-title">Sign In</h1>
-
-              <form onSubmit={handleSignIn} className="auth-form-stack">
-                <div className="input-pill-wrapper">
-                  <svg className="input-pill-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <rect x="3" y="5" width="18" height="14" rx="3"/>
-                    <polyline points="3 7 12 13 21 7"/>
-                  </svg>
-                  <input 
-                    type="text" 
-                    className="input-pill-field"
-                    placeholder="Login ID / Email"
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                  />
-                </div>
-
-                <div className="input-pill-wrapper">
-                  <svg className="input-pill-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <rect x="3" y="11" width="18" height="11" rx="3" ry="3"/>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                  </svg>
-                  <input 
-                    type={showPassword ? "text" : "password"} 
-                    className="input-pill-field"
-                    placeholder="Password"
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                  />
-                  <button 
-                    type="button" 
-                    className="input-pill-action"
-                    onClick={() => setShowPassword(!showPassword)}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                      <path d="M2 9a7 7 0 0 1 10-6 7 7 0 0 1 10 6"/>
-                      <circle cx="12" cy="12" r="3"/>
-                      <path d="M2 15a7 7 0 0 0 10 6 7 7 0 0 0 10-6"/>
-                    </svg>
-                  </button>
-                </div>
-
-                <div className="forgot-pwd-row">
-                  <a className="forgot-pwd-link" onClick={() => setShowForgotModal(true)}>
-                    Forgotten Password?
-                  </a>
-                </div>
-
-                {loginError && (
-                  <div style={{ color: '#EF4444', fontSize: '0.75rem', fontWeight: '800', background: '#FEF2F2', border: '1.5px solid #FCA5A5', padding: '0.65rem 0.85rem', borderRadius: '10px', marginBottom: '1rem', textAlign: 'center', lineHeight: 1.35 }}>
-                    ⚠️ {loginError}
-                  </div>
-                )}
-
-                <button type="submit" className="btn-pill-primary">
-                  Sign In
-                </button>
-              </form>
-            </div>
-          ) : null
-        ) : (
-          /* ═══════════════════════════════════════════════════════
-             ── DASHBOARD: MULTI-PAGE NAVIGATION SYSTEM ──
-             ═══════════════════════════════════════════════════════ */
-          <div className="duty-sheet-card">
-
-            {/* ═══════════════════════════════════════════════════════
-               ── PAGE: ACTION HUB HOME (4 CARDS LANDING) ──
-               ═══════════════════════════════════════════════════════ */}
-            {dashboardView === 'hub' && (
-              <>
-                {/* Header Banner */}
-                <div className="duty-header-banner">
-                  <div className="duty-header-left">
-                    <div className="duty-emblem">🏛️</div>
-                    <div className="duty-header-titles">
-                      <h3>Daily Audit Duty & Work Reporting Sheet</h3>
-                      <p>TTD Concurrent & Internal Audit Management Cell</p>
-                    </div>
-                  </div>
-
-                  <div className="duty-header-badges">
-                    <div className="duty-date-badge">
-                      📅 {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                    </div>
-                    <div className="duty-live-badge">
-                      <span className="pulse-dot-live"></span>
-                      LIVE DUTY SESSION
-                    </div>
-                  </div>
-                </div>
-
-                {/* Success Alert Banner */}
-                {dutySubmitSuccess && (
-                  <div className="duty-success-alert">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <span style={{ fontSize: '1.25rem' }}>✅</span>
-                      <div>
-                        <strong style={{ fontSize: '0.875rem' }}>Daily Duty Entry Submitted Successfully!</strong>
-                        <p style={{ fontSize: '0.75rem', margin: 0 }}>Recorded on central server with auto-captured timestamp.</p>
-                      </div>
-                    </div>
-                    <span style={{ fontSize: '0.725rem', fontWeight: '800', background: '#FFFFFF', padding: '0.25rem 0.6rem', borderRadius: '6px' }}>
-                      ⏱️ {currentTimeStr}
-                    </span>
-                  </div>
-                )}
-
-                {/* ═══════════════════════════════════════════════════════
-                   ── 4 ACTION HUB BOXES (LOGIN ENTRY, LOGOUT, MOM, TASK) ──
-                   ═══════════════════════════════════════════════════════ */}
-                <div className="hub-four-grid">
-                  
-                  {/* Box 1: Login Entry */}
-                  <div 
-                    className="hub-box-card box-entry"
-                    onClick={() => {
-                      setDashboardView('duty_entry');
-                      setDutyActiveTab('sheet');
-                      setHubActiveSection('entry');
-                    }}
-                  >
-                    <div className="hub-box-top">
-                      <div className="hub-box-icon" style={{ background: '#ECFDF5', color: '#047857' }}>📝</div>
-                      <span className="hub-box-badge" style={{ background: '#ECFDF5', color: '#047857' }}>10 PARAMS</span>
-                    </div>
-                    <h4>1. Daily Duty Login Entry</h4>
-                    <p>Auto-captures server timestamp & submit 10-parameter daily audit questionnaire.</p>
-                    <button type="button" className="hub-box-action-btn">
-                      <span>📝 File Duty Entry →</span>
-                    </button>
-                  </div>
-
-                  {/* Box 2: Shift Logout Section */}
-                  <div 
-                    className="hub-box-card box-logout"
-                    onClick={() => {
-                      setDashboardView('shift_logout');
-                    }}
-                  >
-                    <div className="hub-box-top">
-                      <div className="hub-box-icon" style={{ background: '#FEF2F2', color: '#DC2626' }}>🔒</div>
-                      <span className="hub-box-badge" style={{ background: '#FEF2F2', color: '#DC2626' }}>SHIFT LOGOUT</span>
-                    </div>
-                    <h4>2. Shift Logout Section</h4>
-                    <p>Conclude daily shift, record verified server exit timestamp, and save day summary.</p>
-                    <button type="button" className="hub-box-action-btn">
-                      <span>⏱️ Shift Logout →</span>
-                    </button>
-                  </div>
-
-                  {/* Box 3: Minutes of Meeting (MOM) */}
-                  <div 
-                    className="hub-box-card box-mom"
-                    onClick={() => {
-                      setMomOrganizer(currentUser?.name || 'Demo Managing Partner');
-                      setMomActiveSubTab('basic');
-                      setDashboardView('mom_page');
-                    }}
-                  >
-                    <div className="hub-box-top">
-                      <div className="hub-box-icon" style={{ background: '#EFF6FF', color: '#1D4ED8' }}>🏛️</div>
-                      <span className="hub-box-badge" style={{ background: '#EFF6FF', color: '#1D4ED8' }}>{momsList.length} LOGGED</span>
-                    </div>
-                    <h4>3. Minutes of Meeting (MOM)</h4>
-                    <p>Record meeting details, agenda, decisions, and action items with deadlines.</p>
-                    <button type="button" className="hub-box-action-btn">
-                      <span>➕ Create / View MOM →</span>
-                    </button>
-                  </div>
-
-                  {/* Box 4: Create New Task */}
-                  <div 
-                    className="hub-box-card box-task"
-                    onClick={() => {
-                      setNewTaskAssignedTo(currentUser?.name || 'Demo Managing Partner');
-                      setDashboardView('task_page');
-                    }}
-                  >
-                    <div className="hub-box-top">
-                      <div className="hub-box-icon" style={{ background: '#F5F3FF', color: '#7C3AED' }}>🎯</div>
-                      <span className="hub-box-badge" style={{ background: '#F5F3FF', color: '#7C3AED' }}>{tasksList.length} TASKS</span>
-                    </div>
-                    <h4>4. Create New Task</h4>
-                    <p>Create tasks for yourself or assign audit tasks to team members with priorities.</p>
-                    <button type="button" className="hub-box-action-btn">
-                      <span>➕ Create / Assign Task →</span>
-                    </button>
-                  </div>
-
-                </div>
-
-                {/* Navigation Tabs between Super Admin Views & Submitted History */}
-                <div className="dash-tab-strip" style={{ marginBottom: '1.5rem' }}>
-                  {currentUser.role === 'SUPER_ADMIN' ? (
-                    <>
-                      <button 
-                        type="button"
-                        className={`dash-tab-btn ${dutyActiveTab === 'all_users' ? 'active' : ''}`}
-                        onClick={() => { setDutyActiveTab('all_users'); setHubActiveSection('all_users'); }}
-                      >
-                        👥 All Users Directory ({usersDb.length})
-                      </button>
-                      <button 
-                        type="button"
-                        className={`dash-tab-btn ${dutyActiveTab === 'all_reports' ? 'active' : ''}`}
-                        onClick={() => { setDutyActiveTab('all_reports'); setHubActiveSection('all_reports'); }}
-                      >
-                        📋 All Daily Reports ({dutySubmittedReports.length})
-                      </button>
-                      <button 
-                        type="button"
-                        className={`dash-tab-btn ${dutyActiveTab === 'all_attendance' ? 'active' : ''}`}
-                        onClick={() => { setDutyActiveTab('all_attendance'); setHubActiveSection('all_attendance'); }}
-                      >
-                        ⏱️ Master Attendance ({attendanceLedger.length})
-                      </button>
-                      <button 
-                        type="button"
-                        className={`dash-tab-btn ${dutyActiveTab === 'records' ? 'active' : ''}`}
-                        onClick={() => { setDutyActiveTab('records'); setHubActiveSection('records'); }}
-                      >
-                        📋 My Reports ({dutySubmittedReports.length})
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button 
-                        type="button"
-                        className={`dash-tab-btn ${dutyActiveTab === 'records' ? 'active' : ''}`}
-                        onClick={() => { setDutyActiveTab('records'); setHubActiveSection('records'); }}
-                      >
-                        📋 Today's Submitted Reports ({dutySubmittedReports.length})
-                      </button>
-                    </>
-                  )}
-                </div>
-
-            {/* ═══════════════════════════════════════════════════════
-               ── TAB 1 (SUPER ADMIN): ALL USERS & STAFF DIRECTORY ──
-               ═══════════════════════════════════════════════════════ */}
-            {dutyActiveTab === 'all_users' && (
-              <div className="super-admin-section">
-                
-                {/* KPI Metrics Summary Bar */}
-                <div className="super-kpi-grid">
-                  <div className="super-kpi-card">
-                    <div className="super-kpi-icon" style={{ background: '#EFF6FF', color: '#1D4ED8' }}>👥</div>
-                    <div>
-                      <span className="kpi-label">Total Staff / Users</span>
-                      <div className="kpi-value">{usersDb.length} Registered</div>
-                    </div>
-                  </div>
-
-                  <div className="super-kpi-card">
-                    <div className="super-kpi-icon" style={{ background: '#ECFDF5', color: '#047857' }}>🟢</div>
-                    <div>
-                      <span className="kpi-label">Active Shifts Now</span>
-                      <div className="kpi-value" style={{ color: '#047857' }}>
-                        {attendanceLedger.filter(a => a.active).length} On-Duty
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="super-kpi-card">
-                    <div className="super-kpi-icon" style={{ background: '#FEF3C7', color: '#B45309' }}>📝</div>
-                    <div>
-                      <span className="kpi-label">Daily Reports Filed</span>
-                      <div className="kpi-value">{dutySubmittedReports.length} Submitted</div>
-                    </div>
-                  </div>
-
-                  <div className="super-kpi-card">
-                    <div className="super-kpi-icon" style={{ background: '#F3E8FF', color: '#7E22CE' }}>🏛️</div>
-                    <div>
-                      <span className="kpi-label">Enterprise Units</span>
-                      <div className="kpi-value">{ORGANIZATIONAL_UNITS.length} Units</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Search & Filter Toolbar */}
-                <div className="super-admin-toolbar">
-                  <div className="super-toolbar-search">
-                    <svg className="super-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <circle cx="11" cy="11" r="8"/>
-                      <path d="m21 21-4.3-4.3"/>
-                    </svg>
-                    <input 
-                      type="text"
-                      className="super-search-input"
-                      placeholder="Search by name, student reg no, email, unit, phone, designation..."
-                      value={adminUserSearch}
-                      onChange={(e) => setAdminUserSearch(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="super-toolbar-filters">
-                    <select 
-                      className="super-filter-select"
-                      value={adminUserUnitFilter}
-                      onChange={(e) => setAdminUserUnitFilter(e.target.value)}
-                      title="Filter by TTD Audit Unit"
-                    >
-                      <option value="ALL">🏛️ All Units</option>
-                      {ORGANIZATIONAL_UNITS.map((u, i) => (
-                        <option key={i} value={u}>{u}</option>
-                      ))}
-                    </select>
-
-                    <select 
-                      className="super-filter-select"
-                      value={adminUserRoleFilter}
-                      onChange={(e) => setAdminUserRoleFilter(e.target.value)}
-                      title="Filter by Role Level"
-                    >
-                      <option value="ALL">👑 All Roles</option>
-                      <option value="SUPER_ADMIN">👑 Super Admin</option>
-                      <option value="MANAGER">💼 Manager</option>
-                      <option value="USER">📋 Field User / Auditor</option>
-                    </select>
-
-                    <select 
-                      className="super-filter-select"
-                      value={adminUserStatusFilter}
-                      onChange={(e) => setAdminUserStatusFilter(e.target.value)}
-                      title="Filter by Live Shift Status"
-                    >
-                      <option value="ALL">⚡ All Shifts</option>
-                      <option value="ACTIVE">🟢 Active On-Duty</option>
-                      <option value="OFFLINE">⚪ Logged Out / Inactive</option>
-                    </select>
-
-                    <button 
-                      type="button" 
-                      className="btn-super-action"
-                      onClick={() => setShowCreateUserModal(true)}
-                    >
-                      <span>➕ Add User</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Detailed User Cards List */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  {usersDb
-                    .filter(u => {
-                      const q = adminUserSearch.toLowerCase().trim();
-                      const matchesSearch = !q || 
-                        (u.name && u.name.toLowerCase().includes(q)) ||
-                        (u.email && u.email.toLowerCase().includes(q)) ||
-                        (u.studentRegNo && u.studentRegNo.toLowerCase().includes(q)) ||
-                        (u.phone && u.phone.toLowerCase().includes(q)) ||
-                        (u.unit && u.unit.toLowerCase().includes(q)) ||
-                        (u.subUnit && u.subUnit.toLowerCase().includes(q)) ||
-                        (u.roleTitle && u.roleTitle.toLowerCase().includes(q));
-
-                      const matchesUnit = adminUserUnitFilter === 'ALL' || u.unit === adminUserUnitFilter;
-                      const matchesRole = adminUserRoleFilter === 'ALL' || u.role === adminUserRoleFilter;
-                      
-                      const userAtt = attendanceLedger.find(a => a.userId === u.id || a.userEmail === u.email);
-                      const isUserActive = userAtt ? userAtt.active : false;
-                      const matchesStatus = adminUserStatusFilter === 'ALL' || 
-                        (adminUserStatusFilter === 'ACTIVE' && isUserActive) || 
-                        (adminUserStatusFilter === 'OFFLINE' && !isUserActive);
-
-                      return matchesSearch && matchesUnit && matchesRole && matchesStatus;
-                    })
-                    .map((user, idx) => {
-                      const userAtt = attendanceLedger.find(a => a.userId === user.id || a.userEmail === user.email);
-                      const isOnline = userAtt ? userAtt.active : false;
-                      const userReports = dutySubmittedReports.filter(r => 
-                        (user.studentRegNo && r.studentRegNo === user.studentRegNo) ||
-                        (r.fullName && r.fullName.toLowerCase().includes(user.name?.toLowerCase().split(',')[0].trim()))
-                      );
-                      const latestReport = userReports[0];
-                      const supervisor = user.managedBy ? (usersDb.find(m => m.id === user.managedBy)?.name || 'Audit Manager') : 'Executive Apex Admin';
-
-                      return (
-                        <div key={user.id || idx} className="admin-user-complete-card">
-                          
-                          {/* Card Header: Profile Info, Role Pill, Shift Status */}
-                          <div className="admin-user-card-header">
-                            <div className="admin-user-profile-left">
-                              <div className="admin-user-avatar">
-                                {user.role === 'SUPER_ADMIN' ? '👑' : user.role === 'MANAGER' ? '💼' : '👤'}
-                              </div>
-                              <div className="admin-user-name-title">
-                                <h4>
-                                  <span>{user.name}</span>
-                                  <span style={{ fontSize: '0.7rem', color: '#94A3B8', fontWeight: '600' }}>#{user.id}</span>
-                                </h4>
-                                <div className="sub-role">{user.roleTitle || user.role} • Registered Staff</div>
-                              </div>
-                            </div>
-
-                            <div className="admin-user-header-badges">
-                              <span className={`role-badge-pill ${
-                                user.role === 'SUPER_ADMIN' ? 'role-super' : 
-                                user.role === 'MANAGER' ? 'role-manager' : 'role-user'
-                              }`}>
-                                {user.role === 'SUPER_ADMIN' ? '👑 SUPER ADMIN' : 
-                                 user.role === 'MANAGER' ? '💼 MANAGER' : '📋 FIELD AUDITOR'}
-                              </span>
-
-                              <span className={`shift-status-pill ${isOnline ? 'shift-status-active' : 'shift-status-offline'}`}>
-                                <span className={isOnline ? 'pulse-dot-live' : ''} style={{ background: isOnline ? '#10B981' : '#94A3B8', width: 6, height: 6, borderRadius: '50%', display: 'inline-block' }} />
-                                {isOnline ? 'Active On-Duty' : 'Logged Out'}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Complete User Credentials & Metadata Grid */}
-                          <div className="user-complete-meta-grid">
-                            <div className="user-meta-cell">
-                              <span className="meta-label">🎓 Student / ICAI Reg No.</span>
-                              <span className="meta-val" style={{ color: '#1D4ED8' }}>{user.studentRegNo || 'FCA / Student N/A'}</span>
-                            </div>
-
-                            <div className="user-meta-cell">
-                              <span className="meta-label">✉️ Official Email</span>
-                              <span className="meta-val">{user.email}</span>
-                            </div>
-
-                            <div className="user-meta-cell">
-                              <span className="meta-label">📞 Phone / Emergency</span>
-                              <span className="meta-val">{user.phone || '+91 98480 12345'}</span>
-                            </div>
-
-                            <div className="user-meta-cell">
-                              <span className="meta-label">🏛️ Primary Designated Unit</span>
-                              <span className="meta-val" style={{ color: '#0F172A' }}>{user.unit || 'All Units'}</span>
-                            </div>
-
-                            <div className="user-meta-cell">
-                              <span className="meta-label">🏢 Specific Sub-Unit / Counter</span>
-                              <span className="meta-val">{user.subUnit || 'Designated Audit Desk'}</span>
-                            </div>
-
-                            <div className="user-meta-cell">
-                              <span className="meta-label">👤 Reporting Supervisor</span>
-                              <span className="meta-val">{supervisor}</span>
-                            </div>
-                          </div>
-
-                          {/* Shift Timestamps & Latest Daily Report Snippet */}
-                          <div className="user-card-lower-grid">
-                            <div className="user-shift-box">
-                              <h6>⏱️ Today's Shift Timestamps</h6>
-                              <div className="user-shift-times">
-                                <div>
-                                  <span>SERVER LOGIN</span>
-                                  <strong>{userAtt ? userAtt.loginTime : (isOnline ? currentTimeStr : '09:00 AM')}</strong>
-                                </div>
-                                <div>
-                                  <span>SERVER LOGOUT</span>
-                                  <strong style={{ color: isOnline ? '#10B981' : '#64748B' }}>
-                                    {userAtt ? (userAtt.logoutTime || (isOnline ? '● Shift Active' : '05:30 PM')) : (isOnline ? '● Active' : 'Completed')}
-                                  </strong>
-                                </div>
-                              </div>
-                              <div style={{ marginTop: '0.45rem', fontSize: '0.685rem', color: '#64748B' }}>
-                                Status: <strong>{userAtt?.duration || (isOnline ? 'Session Active' : 'Standard Shift Verified')}</strong>
-                              </div>
-                            </div>
-
-                            <div className="user-duty-snippet-box">
-                              <h6>📝 Latest Daily Duty Sheet (11 Parameters Summary)</h6>
-                              {latestReport ? (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                                  <div>🎯 <strong>Objective:</strong> {latestReport.workObjective}</div>
-                                  <div>🏆 <strong>EOD Target:</strong> {latestReport.targetToAchieve}</div>
-                                  {latestReport.caRemarks && (
-                                    <div style={{ color: '#B45309' }}>⚠️ <strong>CA Remarks:</strong> {latestReport.caRemarks}</div>
-                                  )}
-                                  <div>🤝 <strong>Unit POC:</strong> {latestReport.pocName || 'POC Officer'} • Work: <strong>{latestReport.auditWorkType}</strong></div>
-                                </div>
-                              ) : (
-                                <div style={{ color: '#64748B', fontStyle: 'italic' }}>
-                                  ⏳ Awaiting today's duty sheet submission from this user.
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Action Footer */}
-                          <div className="user-card-action-footer">
-                            <div style={{ fontSize: '0.725rem', color: '#64748B' }}>
-                              Total Reports Filed: <strong style={{ color: '#0F172A' }}>{userReports.length}</strong> • Onboarded: <strong>{user.joinedDate || '01-Jan-2024'}</strong>
-                            </div>
-
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                              <button 
-                                type="button" 
-                                className="btn-card-edit-role"
-                                onClick={() => setEditingRoleUser(user)}
-                              >
-                                ✏️ Reassign Unit / Role
-                              </button>
-                              <button 
-                                type="button" 
-                                className="btn-card-dossier"
-                                onClick={() => setSelectedUserDetailModal(user)}
-                              >
-                                🔍 View Complete Details & Dossier
-                              </button>
-                            </div>
-                          </div>
-
-                        </div>
-                      );
-                    })}
-
-                  {usersDb.length === 0 && (
-                    <div style={{ textAlign: 'center', padding: '3rem 1rem', color: '#94A3B8' }}>
-                      No staff users found in database.
-                    </div>
-                  )}
-                </div>
-
-              </div>
-            )}
-
-            {/* ═══════════════════════════════════════════════════════
-               ── TAB 2 (SUPER ADMIN): ALL DAILY DUTY REPORTS ──
-               ═══════════════════════════════════════════════════════ */}
-            {dutyActiveTab === 'all_reports' && (
-              <div className="super-admin-section">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                  <div>
-                    <h4 style={{ fontSize: '1.1rem', fontWeight: '800', color: '#0F172A', margin: 0 }}>
-                      📋 All Users' Daily Audit Duty Reports ({dutySubmittedReports.length})
-                    </h4>
-                    <p style={{ fontSize: '0.75rem', color: '#64748B', margin: '3px 0 0' }}>
-                      Verified multi-unit audit duty sheets filed across all TTD units
-                    </p>
-                  </div>
-                  <span style={{ fontSize: '0.75rem', background: '#ECFDF5', color: '#047857', padding: '0.35rem 0.75rem', borderRadius: 'var(--radius-pill)', fontWeight: '800', border: '1px solid #A7F3D0' }}>
-                    ● Central Database Synced
-                  </span>
-                </div>
-
-                <div className="responsive-cards-grid">
-                  {dutySubmittedReports.map((rep, idx) => (
-                    <div key={rep.id || idx} className="enterprise-account-card">
-                      <div className="acc-card-header">
-                        <div>
-                          <span className="user-unit-tag" style={{ marginBottom: 4 }}>{rep.unitDetails}</span>
-                          <span className="acc-name-text" style={{ display: 'block', fontSize: '0.95rem' }}>{rep.fullName}</span>
-                        </div>
-                        <span className="role-badge-pill role-user">
-                          {rep.studentRegNo || 'STUDENT'}
-                        </span>
-                      </div>
-
-                      <div style={{ fontSize: '0.75rem', color: '#334155', margin: '0.4rem 0', fontWeight: '600' }}>
-                        📍 Sub-Unit: <strong>{rep.subUnitDetails}</strong> • Type: <strong>{rep.auditWorkType}</strong>
-                      </div>
-
-                      <div className="acc-time-grid">
-                        <div>
-                          <span>LOGIN TIME</span>
-                          <strong>{rep.loginTime}</strong>
-                        </div>
-                        <div>
-                          <span>LOGOUT TIME</span>
-                          <strong style={{ color: rep.logoutTime ? '#0F172A' : '#10B981' }}>
-                            {rep.logoutTime || '● Active Duty'}
-                          </strong>
-                        </div>
-                      </div>
-
-                      <div style={{ background: '#F8FAFC', padding: '0.6rem 0.75rem', borderRadius: '12px', fontSize: '0.725rem', color: '#475569', marginTop: '0.5rem' }}>
-                        <div>🎯 <strong>Objective:</strong> {rep.workObjective || 'General Audit Verification'}</div>
-                        <div style={{ marginTop: '0.25rem' }}>🏆 <strong>Target:</strong> {rep.targetToAchieve || 'Standard compliance verified'}</div>
-                        {rep.caRemarks && (
-                          <div style={{ marginTop: '0.35rem', background: '#FFFBEB', padding: '0.35rem 0.5rem', borderRadius: '6px', color: '#B45309', border: '1px solid #FDE68A' }}>
-                            ⚠️ <strong>CA Remarks to Management:</strong> {rep.caRemarks}
-                          </div>
-                        )}
-                        {rep.logoutRemarks && (
-                          <div style={{ marginTop: '0.35rem', background: '#FEF2F2', padding: '0.35rem 0.5rem', borderRadius: '6px', color: '#DC2626', border: '1px solid #FECACA' }}>
-                            🔒 <strong>Evening Handover:</strong> {rep.logoutRemarks}
-                          </div>
-                        )}
-                        <div style={{ marginTop: '0.35rem', color: '#047857', display: 'flex', justifyContent: 'space-between' }}>
-                          <span>🤝 <strong>Unit POC:</strong> {rep.pocName || 'Not specified'}</span>
-                          <span>⏱️ {rep.timestamp || 'Verified'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-
-                  {dutySubmittedReports.length === 0 && (
-                    <div style={{ textAlign: 'center', padding: '3rem 1rem', color: '#94A3B8', gridColumn: '1 / -1' }}>
-                      No daily duty sheets filed in system yet.
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ═══════════════════════════════════════════════════════
-               ── TAB 3 (SUPER ADMIN): MASTER ATTENDANCE LEDGER ──
-               ═══════════════════════════════════════════════════════ */}
-            {dutyActiveTab === 'all_attendance' && (
-              <div className="super-admin-section">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                  <div>
-                    <h4 style={{ fontSize: '1.1rem', fontWeight: '800', color: '#0F172A', margin: 0 }}>
-                      ⏱️ Master Attendance & Shift Timestamps Ledger ({attendanceLedger.length})
-                    </h4>
-                    <p style={{ fontSize: '0.75rem', color: '#64748B', margin: '3px 0 0' }}>
-                      Server authoritative real-time shift login and logout records
-                    </p>
-                  </div>
-                  <span style={{ fontSize: '0.75rem', background: '#EFF6FF', color: '#1D4ED8', padding: '0.35rem 0.75rem', borderRadius: 'var(--radius-pill)', fontWeight: '800', border: '1px solid #BFDBFE' }}>
-                    🔒 Cryptographically Verified
-                  </span>
-                </div>
-
-                <div className="responsive-cards-grid">
-                  {attendanceLedger.map((att, idx) => (
-                    <div key={att.id || idx} className="enterprise-account-card">
-                      <div className="acc-card-header">
-                        <div>
-                          <span className="user-unit-tag" style={{ marginBottom: 4 }}>{att.unit || 'All Units'}</span>
-                          <span className="acc-name-text" style={{ display: 'block', fontSize: '0.95rem' }}>{att.userName}</span>
-                        </div>
-                        <span className={`shift-status-pill ${att.active ? 'shift-status-active' : 'shift-status-offline'}`}>
-                          {att.active ? '● Active Session' : 'Completed'}
-                        </span>
-                      </div>
-
-                      <div className="acc-time-grid" style={{ margin: '0.5rem 0' }}>
-                        <div>
-                          <span>LOGIN TIME</span>
-                          <strong>{att.loginTime}</strong>
-                        </div>
-                        <div>
-                          <span>LOGOUT TIME</span>
-                          <strong style={{ color: att.logoutTime ? '#0F172A' : '#10B981' }}>
-                            {att.logoutTime || '● In Session'}
-                          </strong>
-                        </div>
-                      </div>
-
-                      <div style={{ background: '#F8FAFC', padding: '0.5rem 0.65rem', borderRadius: '10px', fontSize: '0.725rem', color: '#475569' }}>
-                        <div>📅 <strong>Shift Date:</strong> {att.date || '12-Aug-2026'} • <strong>Window:</strong> {att.timeWindow}</div>
-                        <div style={{ marginTop: '0.25rem' }}>⏳ <strong>Duration:</strong> {att.duration || 'Session Active'}</div>
-                        {att.managerRemarks && (
-                          <div style={{ marginTop: '0.25rem', color: '#1E3A8A' }}>
-                            💬 <strong>Note:</strong> {att.managerRemarks}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-
-                  {attendanceLedger.length === 0 && (
-                    <div style={{ textAlign: 'center', padding: '3rem 1rem', color: '#94A3B8', gridColumn: '1 / -1' }}>
-                      No attendance sessions logged yet today.
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ═══════════════════════════════════════════════════════
-               ── TAB (FIELD AUDITOR): TODAY'S SUBMITTED REPORTS ──
-               ═══════════════════════════════════════════════════════ */}
-            {dutyActiveTab === 'records' && (
-              <div className="duty-recent-table-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <div>
-                    <h5 style={{ fontSize: '0.95rem', fontWeight: '800', color: '#0F172A' }}>Today's Duty Records</h5>
-                    <p style={{ fontSize: '0.725rem', color: '#64748B' }}>Audit logs filed during today's shift</p>
-                  </div>
-                  <span style={{ fontSize: '0.725rem', background: '#ECFDF5', color: '#047857', padding: '0.25rem 0.6rem', borderRadius: '8px', fontWeight: '800' }}>
-                    ● Central Database Synced
-                  </span>
-                </div>
-
-                <div className="responsive-cards-grid">
-                  {dutySubmittedReports.map((rep, idx) => (
-                    <div key={rep.id || idx} className="enterprise-account-card">
-                      <div className="acc-card-header">
-                        <div>
-                          <span className="user-unit-tag" style={{ marginBottom: 4 }}>{rep.unitDetails}</span>
-                          <span className="acc-name-text" style={{ display: 'block', fontSize: '0.9rem' }}>{rep.fullName}</span>
-                        </div>
-                        <span className="role-badge-pill role-user">
-                          {rep.studentRegNo || 'STUDENT'}
-                        </span>
-                      </div>
-
-                      <div style={{ fontSize: '0.75rem', color: '#334155', margin: '0.4rem 0', fontWeight: '600' }}>
-                        📍 Sub-Unit: <strong>{rep.subUnitDetails}</strong> • Type: <strong>{rep.auditWorkType}</strong>
-                      </div>
-
-                      <div className="acc-time-grid">
-                        <div>
-                          <span>LOGIN TIME</span>
-                          <strong>{rep.loginTime}</strong>
-                        </div>
-                        <div>
-                          <span>LOGOUT TIME</span>
-                          <strong style={{ color: rep.logoutTime ? '#0F172A' : '#10B981' }}>
-                            {rep.logoutTime || '● Active Duty'}
-                          </strong>
-                        </div>
-                      </div>
-
-                      <div style={{ background: '#F8FAFC', padding: '0.5rem 0.65rem', borderRadius: '10px', fontSize: '0.725rem', color: '#475569', marginTop: '0.4rem' }}>
-                        <div>🎯 <strong>Objective:</strong> {rep.workObjective || 'General Audit Verification'}</div>
-                        <div style={{ marginTop: '0.25rem' }}>🏆 <strong>Target:</strong> {rep.targetToAchieve || 'Standard compliance verified'}</div>
-                        {rep.caRemarks && (
-                          <div style={{ marginTop: '0.25rem', color: '#B45309' }}>
-                            ⚠️ <strong>CA Remarks:</strong> {rep.caRemarks}
-                          </div>
-                        )}
-                        {rep.logoutRemarks && (
-                          <div style={{ marginTop: '0.25rem', color: '#DC2626', background: '#FEF2F2', padding: '0.25rem 0.5rem', borderRadius: '6px' }}>
-                            🔒 <strong>Evening Handover:</strong> {rep.logoutRemarks}
-                          </div>
-                        )}
-                        <div style={{ marginTop: '0.25rem', color: '#047857' }}>
-                          🤝 <strong>Unit POC:</strong> {rep.pocName || 'Not specified'}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {dutySubmittedReports.length === 0 && (
-                  <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#94A3B8', fontSize: '0.85rem' }}>
-                    No duty sheets filed yet for today. Use the "Daily Audit Duty Sheet" tab to submit.
-                  </div>
-                )}
-              </div>
-            )}
-
-              </>
-            )}
-
-            {/* ═══════════════════════════════════════════════════════
-               ── PAGE: DAILY DUTY LOGIN ENTRY (FULL PAGE VIEW) ──
-               ═══════════════════════════════════════════════════════ */}
-            {dashboardView === 'duty_entry' && (
-              <div className="dedicated-page-view page-entry" style={{ animation: 'slideInPage 0.3s ease' }}>
-                {/* Page Header with Back Navigation */}
-                <div className="page-view-header">
-                  <button 
-                    type="button" 
-                    className="page-back-btn"
-                    onClick={() => setDashboardView('hub')}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M19 12H5"/>
-                      <path d="M12 19l-7-7 7-7"/>
-                    </svg>
-                    <span>Back to Dashboard</span>
-                  </button>
-                  <div className="page-view-title-group">
-                    <div className="page-view-icon" style={{ background: '#ECFDF5', color: '#047857' }}>📝</div>
-                    <div>
-                      <h3 className="page-view-title">Daily Duty Login Entry</h3>
-                      <p className="page-view-subtitle">10-Parameter Daily Audit Questionnaire • Auto Server Timestamp</p>
-                    </div>
-                  </div>
-                  <div className="page-view-badges">
-                    <div className="duty-date-badge">
-                      📅 {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                    </div>
-                    <div className="duty-live-badge">
-                      <span className="pulse-dot-live"></span>
-                      LIVE
-                    </div>
-                  </div>
-                </div>
-
-                {/* Success Alert Banner */}
-                {dutySubmitSuccess && (
-                  <div className="duty-success-alert">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <span style={{ fontSize: '1.25rem' }}>✅</span>
-                      <div>
-                        <strong style={{ fontSize: '0.875rem' }}>Daily Duty Entry Submitted Successfully!</strong>
-                        <p style={{ fontSize: '0.75rem', margin: 0 }}>Recorded on central server with auto-captured timestamp.</p>
-                      </div>
-                    </div>
-                    <span style={{ fontSize: '0.725rem', fontWeight: '800', background: '#FFFFFF', padding: '0.25rem 0.6rem', borderRadius: '6px' }}>
-                      ⏱️ {currentTimeStr}
-                    </span>
-                  </div>
-                )}
-
-                {/* 10 Parameters Duty Entry Form */}
-                <form onSubmit={(e) => { e.preventDefault(); handleSaveDutyReport(false); }}>
-                  <div className="duty-form-grid">
-                    
-                    {/* Parameter 1: Login Time (Server Auto-Captured) */}
-                    <div className="duty-field-wrapper">
-                      <label className="duty-field-label">
-                        <span>⏱️ 1. Login Time (Server Auto-Captured)</span>
-                        <span className="req">*</span>
-                      </label>
-                      <div className="duty-auto-time-pill">
-                        <span className="pulse-dot-live"></span>
-                        <span>⏱️ {dutyLoginTime || currentTimeStr}</span>
-                        <span style={{ fontSize: '0.685rem', color: '#047857', background: '#FFFFFF', padding: '0.2rem 0.5rem', borderRadius: '6px', marginLeft: 'auto', fontWeight: '800' }}>
-                          🔒 Auto-Captured from Server
-                        </span>
-                      </div>
-                      <span className="duty-field-hint">Exact timestamp recorded automatically on central server</span>
-                    </div>
-
-                    {/* Parameter 2: Full Name */}
-                    <div className="duty-field-wrapper">
-                      <label className="duty-field-label">
-                        <span>👤 2. Full Name</span>
-                        <span className="req">*</span>
-                      </label>
-                      <input 
-                        type="text" 
-                        className="duty-input-box"
-                        value={dutyFullName}
-                        onChange={(e) => setDutyFullName(e.target.value)}
-                        placeholder="e.g. Ravi Teja / Audit Student Name"
-                        required
-                      />
-                      <span className="duty-field-hint">Auditor / Articled Assistant Name</span>
-                    </div>
-
-                    {/* Parameter 3: Student Registration No. */}
-                    <div className="duty-field-wrapper">
-                      <label className="duty-field-label">
-                        <span>🎓 3. Student Registration No.</span>
-                        <span className="req">*</span>
-                      </label>
-                      <input 
-                        type="text" 
-                        className="duty-input-box"
-                        value={dutyStudentRegNo}
-                        onChange={(e) => setDutyStudentRegNo(e.target.value.toUpperCase())}
-                        placeholder="e.g. SRO0684920 / CRO123456"
-                        required
-                      />
-                      <span className="duty-field-hint">ICAI / SRO / CRO / NRO Student Reg. No.</span>
-                    </div>
-
-                    {/* Parameter 4: TTD Audit Unit */}
-                    <div className="duty-field-wrapper full-row">
-                      <label className="duty-field-label">
-                        <span>🏛️ 4. TTD Audit Unit Details attending today</span>
-                        <span className="req">*</span>
-                      </label>
-                      <select 
-                        className="duty-select-box"
-                        value={dutyUnitDetails}
-                        onChange={(e) => setDutyUnitDetails(e.target.value)}
-                        required
-                      >
-                        <option value="">-- Select TTD Audit Unit --</option>
-                        {ORGANIZATIONAL_UNITS.map((u) => (
-                          <option key={u} value={u}>{u}</option>
-                        ))}
-                      </select>
-                      <span className="duty-field-hint">Official 8-unit concurrent & internal audit assignment</span>
-                    </div>
-
-                    {/* Parameter 5: Type of Audit Work */}
-                    <div className="duty-field-wrapper full-row">
-                      <label className="duty-field-label">
-                        <span>📋 5. Type of Audit Work</span>
-                        <span className="req">*</span>
-                      </label>
-                      <select 
-                        className="duty-select-box"
-                        value={dutyAuditWorkType}
-                        onChange={(e) => setDutyAuditWorkType(e.target.value)}
-                        required
-                      >
-                        <option value="">-- Select Audit Work Type --</option>
-                        {AUDIT_WORK_TYPES.map((w) => (
-                          <option key={w} value={w}>{w}</option>
-                        ))}
-                      </select>
-                      <span className="duty-field-hint">Category of audit work being performed today</span>
-                    </div>
-
-                    {/* Parameter 6: Detailed Work Description */}
-                    <div className="duty-field-wrapper full-row">
-                      <label className="duty-field-label">
-                        <span>📝 6. Detailed Work Description</span>
-                        <span className="req">*</span>
-                      </label>
-                      <textarea 
-                        className="duty-textarea-box"
-                        rows="3"
-                        value={dutyWorkObjective}
-                        onChange={(e) => setDutyWorkObjective(e.target.value)}
-                        placeholder="Describe in detail the audit work performed today (findings, procedures, observations)..."
-                        required
-                      />
-                      <span className="duty-field-hint">Narrative of audit procedures, findings, and observations</span>
-                    </div>
-
-                    {/* Parameter 7: Number of Vouchers */}
-                    <div className="duty-field-wrapper">
-                      <label className="duty-field-label">
-                        <span>🧾 7. Number of Vouchers / Documents Verified</span>
-                        <span className="req">*</span>
-                      </label>
-                      <input 
-                        type="number" 
-                        className="duty-input-box"
-                        value={dutyVouchersVerified}
-                        onChange={(e) => setDutyVouchersVerified(e.target.value)}
-                        placeholder="e.g. 45"
-                        min="0"
-                        required
-                      />
-                      <span className="duty-field-hint">Total ledger entries, vouchers, tokens, or documents reviewed</span>
-                    </div>
-
-                    {/* Parameter 8: Target to Achieve */}
-                    <div className="duty-field-wrapper">
-                      <label className="duty-field-label">
-                        <span>🎯 8. Target to Achieve / Expected Completion</span>
-                        <span className="req">*</span>
-                      </label>
-                      <input 
-                        type="text" 
-                        className="duty-input-box"
-                        value={dutyTargetToAchieve}
-                        onChange={(e) => setDutyTargetToAchieve(e.target.value)}
-                        placeholder="e.g. Complete Donor Cell audit by 3:00 PM"
-                        required
-                      />
-                      <span className="duty-field-hint">Specific audit milestone or completion target for today's shift</span>
-                    </div>
-
-                    {/* Parameter 9: CA Remarks */}
-                    <div className="duty-field-wrapper full-row">
-                      <label className="duty-field-label">
-                        <span>✍️ 9. CA Remarks / Observations for Management</span>
-                        <span className="req">*</span>
-                      </label>
-                      <textarea 
-                        className="duty-textarea-box"
-                        rows="3"
-                        value={dutyCaRemarks}
-                        onChange={(e) => setDutyCaRemarks(e.target.value)}
-                        placeholder="Key audit observations, discrepancies, or remarks for CA in-charge..."
-                        required
-                      />
-                      <span className="duty-field-hint">High priority findings for the CA in-charge & management</span>
-                    </div>
-
-                    {/* Parameter 10: Point of Contact Name */}
-                    <div className="duty-field-wrapper">
-                      <label className="duty-field-label">
-                        <span>🤝 10. Point of Contact Name [ POC ] within the unit</span>
-                        <span className="req">*</span>
-                      </label>
-                      <input 
-                        type="text" 
-                        className="duty-input-box"
-                        value={dutyPocName}
-                        onChange={(e) => setDutyPocName(e.target.value)}
-                        placeholder="e.g. Sri S. Ramana Murthy, Superintendent / AEO"
-                        required
-                      />
-                      <span className="duty-field-hint">Designated TTD officer or unit in-charge</span>
-                    </div>
-                  </div>
-
-                  {/* Form Action Controls */}
-                  <div className="duty-action-group" style={{ marginTop: '1.5rem' }}>
-                    <button 
-                      type="submit" 
-                      className="btn-duty-submit"
-                    >
-                      <span>💾 Submit Daily Duty Entry</span>
-                    </button>
-                  </div>
-                </form>
-              </div>
-            )}
-
-
-            {/* ═══════════════════════════════════════════════════════
-               ── PAGE: SHIFT LOGOUT (FULL PAGE VIEW) ──
-               ═══════════════════════════════════════════════════════ */}
-            {dashboardView === 'shift_logout' && (
-              <div className="dedicated-page-view page-logout" style={{ animation: 'slideInPage 0.3s ease' }}>
-                {/* Page Header with Back Navigation */}
-                <div className="page-view-header">
-                  <button 
-                    type="button" 
-                    className="page-back-btn"
-                    onClick={() => setDashboardView('hub')}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M19 12H5"/>
-                      <path d="M12 19l-7-7 7-7"/>
-                    </svg>
-                    <span>Back to Dashboard</span>
-                  </button>
-                  <div className="page-view-title-group">
-                    <div className="page-view-icon" style={{ background: '#FEF2F2', color: '#DC2626' }}>🔒</div>
-                    <div>
-                      <h3 className="page-view-title">Shift Logout & Session Handover</h3>
-                      <p className="page-view-subtitle">Conclude today's audit shift and record verified server exit timestamp</p>
-                    </div>
-                  </div>
-                  <div className="page-view-badges">
-                    <div className="duty-live-badge" style={{ background: '#FEF2F2', color: '#DC2626', borderColor: '#FECACA' }}>
-                      <span className="pulse-dot-live" style={{ background: '#DC2626' }}></span>
-                      SESSION ACTIVE
-                    </div>
-                  </div>
-                </div>
-
-                {/* Shift Times Panel */}
-                <div style={{ background: '#FEF2F2', border: '1.5px solid #FECACA', borderRadius: '18px', padding: '1.5rem', marginBottom: '1.5rem' }}>
-                  <div className="user-shift-times" style={{ background: 'white', border: '1px solid #FECACA', borderRadius: 12, padding: '0.85rem 1rem', marginBottom: '1.25rem' }}>
-                    <div>
-                      <span style={{ color: '#64748B', fontSize: '0.7rem' }}>TODAY'S VERIFIED LOGIN TIME</span>
-                      <strong style={{ fontSize: '0.95rem', color: '#0F172A' }}>{dutyLoginTime || currentTimeStr}</strong>
-                    </div>
-                    <div>
-                      <span style={{ color: '#64748B', fontSize: '0.7rem' }}>CURRENT SERVER TIME (LOGOUT TIMESTAMP)</span>
-                      <strong style={{ fontSize: '0.95rem', color: '#DC2626' }}>{currentTimeStr}</strong>
-                    </div>
-                  </div>
-
-                  <div className="duty-field-wrapper full-row" style={{ marginBottom: '1.25rem' }}>
-                    <label className="duty-field-label">
-                      <span>📝 Day-End Handover & Logout Remarks (Optional)</span>
-                    </label>
-                    <textarea 
-                      className="duty-textarea-box"
-                      rows="3"
-                      value={logoutRemarks}
-                      onChange={(e) => setLogoutRemarks(e.target.value)}
-                      placeholder="Briefly state key handover items or notes before logging out..."
-                    />
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                    <button 
-                      type="button"
-                      className="btn-card-edit-role"
-                      onClick={() => setDashboardView('hub')}
-                      style={{ padding: '0.65rem 1.25rem' }}
-                    >
-                      ← Back to Dashboard
-                    </button>
-
-                    <button 
-                      type="button"
-                      className="btn-duty-logout"
-                      onClick={handleLogout}
-                      style={{ padding: '0.75rem 1.85rem', fontSize: '0.9rem' }}
-                    >
-                      <span>⏱️ Conclude Shift & Stamp Server Logout</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-
-            {/* ═══════════════════════════════════════════════════════
-               ── PAGE: MINUTES OF MEETING (FULL PAGE VIEW) ──
-               ═══════════════════════════════════════════════════════ */}
-            {dashboardView === 'mom_page' && (
-              <div className="dedicated-page-view page-mom" style={{ animation: 'slideInPage 0.3s ease' }}>
-                {/* Page Header with Back Navigation */}
-                <div className="page-view-header">
-                  <button 
-                    type="button" 
-                    className="page-back-btn"
-                    onClick={() => setDashboardView('hub')}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M19 12H5"/>
-                      <path d="M12 19l-7-7 7-7"/>
-                    </svg>
-                    <span>Back to Dashboard</span>
-                  </button>
-                  <div className="page-view-title-group">
-                    <div className="page-view-icon" style={{ background: '#EFF6FF', color: '#1D4ED8' }}>🏛️</div>
-                    <div>
-                      <h3 className="page-view-title">Minutes of Meeting (MOM)</h3>
-                      <p className="page-view-subtitle">Record meeting details, agenda, decisions, and action items</p>
-                    </div>
-                  </div>
-                  <div className="page-view-badges">
-                    <span className="hub-box-badge" style={{ background: '#EFF6FF', color: '#1D4ED8' }}>{momsList.length} LOGGED</span>
-                  </div>
-                </div>
-
-                {/* MOM Success Toast */}
-                {momSuccessToast && (
-                  <div className="duty-success-alert" style={{ background: '#EFF6FF', borderColor: '#93C5FD' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <span style={{ fontSize: '1.25rem' }}>✅</span>
-                      <strong style={{ fontSize: '0.875rem', color: '#1E3A8A' }}>Minutes of Meeting saved successfully!</strong>
-                    </div>
-                  </div>
-                )}
-
-                {/* Segmented Tabs */}
-                <div className="mom-tabs-segmented">
-                  <button type="button" className={`mom-tab-item ${momActiveSubTab === 'basic' ? 'active' : ''}`} onClick={() => setMomActiveSubTab('basic')}>
-                    📋 Basic Details
-                  </button>
-                  <button type="button" className={`mom-tab-item ${momActiveSubTab === 'content' ? 'active' : ''}`} onClick={() => setMomActiveSubTab('content')}>
-                    📝 Content & Agenda
-                  </button>
-                  <button type="button" className={`mom-tab-item ${momActiveSubTab === 'actions' ? 'active' : ''}`} onClick={() => setMomActiveSubTab('actions')}>
-                    🎯 Actions & Preview
-                  </button>
-                </div>
-
-                {/* Tab 1: Basic Details */}
-                {momActiveSubTab === 'basic' && (
-                  <div className="mom-page-form-section">
-                    <div className="mom-form-row-2">
-                      <div className="mom-field-group">
-                        <label>Meeting Title</label>
-                        <input className="mom-field-input" value={momMeetingTitle} onChange={(e) => setMomMeetingTitle(e.target.value)} placeholder="e.g. Weekly Team Meeting" />
-                      </div>
-                      <div className="mom-field-group">
-                        <label>Meeting Type</label>
-                        <select className="mom-field-select" value={momMeetingType} onChange={(e) => setMomMeetingType(e.target.value)}>
-                          <option>Team Meeting</option>
-                          <option>Client Review</option>
-                          <option>Audit Committee</option>
-                          <option>Management Review</option>
-                          <option>Field Inspection Debrief</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="mom-form-row-2">
-                      <div className="mom-field-group">
-                        <label>📅 Date</label>
-                        <input className="mom-field-input" value={momDate} onChange={(e) => setMomDate(e.target.value)} placeholder="DD/MM/YYYY" />
-                      </div>
-                      <div className="mom-field-group">
-                        <label>⏰ Time</label>
-                        <input className="mom-field-input" value={momTime} onChange={(e) => setMomTime(e.target.value)} placeholder="e.g. 10:30 AM" />
-                      </div>
-                    </div>
-                    <div className="mom-field-group">
-                      <label>👤 Organizer / Chairperson</label>
-                      <input className="mom-field-input" value={momOrganizer} onChange={(e) => setMomOrganizer(e.target.value)} />
-                    </div>
-                    <div className="mom-field-group">
-                      <label>📍 Location / Venue</label>
-                      <input className="mom-field-input" value={momLocation} onChange={(e) => setMomLocation(e.target.value)} placeholder="e.g. Conference Room A" />
-                    </div>
-                    <div className="mom-field-group">
-                      <label>👥 Attendees (comma separated)</label>
-                      <textarea className="mom-field-textarea" rows="2" value={momAttendees} onChange={(e) => setMomAttendees(e.target.value)} placeholder="e.g. Ravi Teja, Suresh Kumar, Priya M..." />
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab 2: Content & Agenda */}
-                {momActiveSubTab === 'content' && (
-                  <div className="mom-page-form-section">
-                    <div className="mom-field-group">
-                      <label>📋 Agenda / Topics Covered</label>
-                      <textarea className="mom-field-textarea" rows="4" value={momAgenda} onChange={(e) => setMomAgenda(e.target.value)} placeholder="List the topics discussed during the meeting..." />
-                    </div>
-                    <div className="mom-field-group">
-                      <label>💬 Key Discussions & Decisions</label>
-                      <textarea className="mom-field-textarea" rows="5" value={momDiscussions} onChange={(e) => setMomDiscussions(e.target.value)} placeholder="Summarize key discussions, decisions made, and consensus reached..." />
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab 3: Actions & Preview */}
-                {momActiveSubTab === 'actions' && (
-                  <div className="mom-page-form-section">
-                    <div className="mom-field-group">
-                      <label>🎯 Action Items & Deadlines</label>
-                      <textarea className="mom-field-textarea" rows="4" value={momActionItems} onChange={(e) => setMomActionItems(e.target.value)} placeholder="List action items with responsible persons and deadlines..." />
-                    </div>
-                    <div className="mom-field-group">
-                      <label>📅 Next Meeting</label>
-                      <input className="mom-field-input" value={momNextMeeting} onChange={(e) => setMomNextMeeting(e.target.value)} placeholder="e.g. Next Wednesday, 10:00 AM" />
-                    </div>
-
-                    {/* Preview Box */}
-                    <div className="mom-preview-box">
-                      <div className="mom-preview-header">📄 MOM Preview</div>
-                      <div className="mom-preview-tag">{momMeetingType}</div>
-                      <div className="mom-preview-meta">
-                        <span><strong>Title:</strong> {momMeetingTitle}</span>
-                        <span><strong>Date:</strong> {momDate} at {momTime}</span>
-                        <span><strong>Organizer:</strong> {momOrganizer}</span>
-                        <span><strong>Location:</strong> {momLocation}</span>
-                        {momAttendees && <span><strong>Attendees:</strong> {momAttendees}</span>}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Action Buttons */}
-                <div className="mom-dialog-actions" style={{ borderTop: '1.5px solid #E2E8F0', paddingTop: '1.25rem', marginTop: '1.25rem' }}>
-                  <button type="button" className="btn-mom-cancel" onClick={() => setDashboardView('hub')}>
-                    Cancel
-                  </button>
-                  <button type="button" className="btn-mom-save" onClick={() => {
-                    const newMom = {
-                      id: `mom-${Date.now()}`,
-                      title: momMeetingTitle,
-                      type: momMeetingType,
-                      date: momDate,
-                      time: momTime,
-                      organizer: momOrganizer,
-                      location: momLocation,
-                      attendees: momAttendees,
-                      agenda: momAgenda,
-                      discussions: momDiscussions,
-                      actionItems: momActionItems,
-                      nextMeeting: momNextMeeting,
-                      createdAt: new Date().toISOString()
-                    };
-                    setMomsList(prev => [newMom, ...prev]);
-                    setMomSuccessToast(true);
-                    setTimeout(() => setMomSuccessToast(false), 3000);
-                    // Reset form
-                    setMomMeetingTitle('Weekly Team Meeting');
-                    setMomMeetingType('Team Meeting');
-                    setMomDate(new Date().toLocaleDateString('en-GB'));
-                    setMomTime('10:30 AM');
-                    setMomLocation('Conference Room A, Zoo Road');
-                    setMomAttendees('');
-                    setMomAgenda('');
-                    setMomDiscussions('');
-                    setMomActionItems('');
-                    setMomNextMeeting('');
-                  }}>
-                    💾 Save MOM
-                  </button>
-                </div>
-
-                {/* Previously Logged MOMs */}
-                {momsList.length > 0 && (
-                  <div style={{ marginTop: '1.5rem' }}>
-                    <h4 style={{ fontSize: '0.9rem', fontWeight: '800', color: '#0F172A', marginBottom: '0.75rem' }}>📋 Previously Logged MOMs ({momsList.length})</h4>
-                    {momsList.map((m) => (
-                      <div key={m.id} style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: '14px', padding: '1rem', marginBottom: '0.75rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                          <strong style={{ fontSize: '0.85rem', color: '#0F172A' }}>{m.title}</strong>
-                          <span className="mom-preview-tag">{m.type}</span>
-                        </div>
-                        <div className="mom-preview-meta">
-                          <span>📅 {m.date} at {m.time} • 📍 {m.location}</span>
-                          <span>👤 {m.organizer}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-
-            {/* ═══════════════════════════════════════════════════════
-               ── PAGE: CREATE NEW TASK (FULL PAGE VIEW) ──
-               ═══════════════════════════════════════════════════════ */}
-            {dashboardView === 'task_page' && (
-              <div className="dedicated-page-view page-task" style={{ animation: 'slideInPage 0.3s ease' }}>
-                {/* Page Header with Back Navigation */}
-                <div className="page-view-header">
-                  <button 
-                    type="button" 
-                    className="page-back-btn"
-                    onClick={() => setDashboardView('hub')}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M19 12H5"/>
-                      <path d="M12 19l-7-7 7-7"/>
-                    </svg>
-                    <span>Back to Dashboard</span>
-                  </button>
-                  <div className="page-view-title-group">
-                    <div className="page-view-icon" style={{ background: '#F5F3FF', color: '#7C3AED' }}>🎯</div>
-                    <div>
-                      <h3 className="page-view-title">Create & Assign New Task</h3>
-                      <p className="page-view-subtitle">Create tasks for yourself or assign audit tasks to team members</p>
-                    </div>
-                  </div>
-                  <div className="page-view-badges">
-                    <span className="hub-box-badge" style={{ background: '#F5F3FF', color: '#7C3AED' }}>{tasksList.length} TASKS</span>
-                  </div>
-                </div>
-
-                {/* Task Success Toast */}
-                {taskSuccessToast && (
-                  <div className="duty-success-alert" style={{ background: '#F5F3FF', borderColor: '#C4B5FD' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <span style={{ fontSize: '1.25rem' }}>✅</span>
-                      <strong style={{ fontSize: '0.875rem', color: '#5B21B6' }}>Task created successfully!</strong>
-                    </div>
-                  </div>
-                )}
-
-                {/* Task Form */}
-                <div className="mom-page-form-section">
-                  <div className="mom-field-group">
-                    <label>📌 Task Title</label>
-                    <input className="mom-field-input" value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} placeholder="e.g. Verify Donor Cell reconciliation for July" />
-                  </div>
-
-                  <div className="mom-form-row-2">
-                    <div className="mom-field-group">
-                      <label>⚡ Priority Level</label>
-                      <select className="mom-field-select" value={newTaskPriority} onChange={(e) => setNewTaskPriority(e.target.value)}>
-                        <option>Low Priority</option>
-                        <option>Medium Priority</option>
-                        <option>High Priority</option>
-                        <option>Urgent / Critical</option>
-                      </select>
-                    </div>
-                    <div className="mom-field-group">
-                      <label>📂 Category</label>
-                      <select className="mom-field-select" value={newTaskCategory} onChange={(e) => setNewTaskCategory(e.target.value)}>
-                        <option>General</option>
-                        <option>Audit</option>
-                        <option>Compliance</option>
-                        <option>Investigation</option>
-                        <option>Documentation</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="mom-field-group">
-                    <label>📝 Task Description</label>
-                    <textarea className="mom-field-textarea" rows="4" value={newTaskDescription} onChange={(e) => setNewTaskDescription(e.target.value)} placeholder="Provide detailed instructions for this task..." />
-                  </div>
-
-                  <div className="mom-form-row-2">
-                    <div className="mom-field-group">
-                      <label>👤 Assigned To</label>
-                      <input className="mom-field-input" value={newTaskAssignedTo} onChange={(e) => setNewTaskAssignedTo(e.target.value)} placeholder="e.g. Ravi Teja" />
-                    </div>
-                    <div className="mom-field-group">
-                      <label>📅 Due Date</label>
-                      <input className="mom-field-input" type="date" value={newTaskDueDate} onChange={(e) => setNewTaskDueDate(e.target.value)} />
-                    </div>
-                  </div>
-
-                  <div className="mom-field-group">
-                    <label>🏢 Project / Department</label>
-                    <input className="mom-field-input" value={newTaskProject} onChange={(e) => setNewTaskProject(e.target.value)} placeholder="e.g. Q3 Concurrent Audit Review" />
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="mom-dialog-actions" style={{ borderTop: '1.5px solid #E2E8F0', paddingTop: '1.25rem', marginTop: '1.25rem' }}>
-                  <button type="button" className="btn-mom-cancel" onClick={() => setDashboardView('hub')}>
-                    Cancel
-                  </button>
-                  <button type="button" className="btn-mom-save" style={{ background: '#7C3AED' }} onClick={() => {
-                    if (!newTaskTitle.trim()) return;
-                    const newTask = {
-                      id: `task-${Date.now()}`,
-                      title: newTaskTitle,
-                      priority: newTaskPriority,
-                      description: newTaskDescription,
-                      assignedTo: newTaskAssignedTo,
-                      dueDate: newTaskDueDate,
-                      project: newTaskProject,
-                      category: newTaskCategory,
-                      status: 'Open',
-                      createdAt: new Date().toISOString()
-                    };
-                    setTasksList(prev => [newTask, ...prev]);
-                    setTaskSuccessToast(true);
-                    setTimeout(() => setTaskSuccessToast(false), 3000);
-                    // Reset form
-                    setNewTaskTitle('');
-                    setNewTaskDescription('');
-                    setNewTaskDueDate('');
-                    setNewTaskProject('');
-                    setNewTaskCategory('General');
-                    setNewTaskPriority('Medium Priority');
-                  }}>
-                    🎯 Create Task
-                  </button>
-                </div>
-
-                {/* Previously Created Tasks */}
-                {tasksList.length > 0 && (
-                  <div style={{ marginTop: '1.5rem' }}>
-                    <h4 style={{ fontSize: '0.9rem', fontWeight: '800', color: '#0F172A', marginBottom: '0.75rem' }}>📋 Created Tasks ({tasksList.length})</h4>
-                    {tasksList.map((t) => (
-                      <div key={t.id} style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: '14px', padding: '1rem', marginBottom: '0.75rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                          <strong style={{ fontSize: '0.85rem', color: '#0F172A' }}>{t.title}</strong>
-                          <span className="hub-box-badge" style={{ 
-                            background: t.priority === 'High Priority' || t.priority === 'Urgent / Critical' ? '#FEF2F2' : '#ECFDF5',
-                            color: t.priority === 'High Priority' || t.priority === 'Urgent / Critical' ? '#DC2626' : '#047857'
-                          }}>{t.priority}</span>
-                        </div>
-                        <div className="mom-preview-meta">
-                          <span>👤 {t.assignedTo} • 📂 {t.category}</span>
-                          {t.dueDate && <span>📅 Due: {t.dueDate}</span>}
-                          {t.description && <span style={{ fontSize: '0.7rem', color: '#94A3B8' }}>{t.description.substring(0, 100)}...</span>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-
-          </div>
-        )}
-
-
-      {/* ── Toast Modal: Server Stamped Logout Confirmation ── */}
-
-      {logoutToast && (
-        <div className="logout-stamp-toast">
-          <div style={{ fontSize: '1.5rem', marginBottom: '0.35rem' }}>🔒</div>
-          <h5 style={{ fontSize: '0.95rem', fontWeight: '800', marginBottom: '0.25rem' }}>
-            Logged Out Successfully
-          </h5>
-          <p style={{ fontSize: '0.75rem', color: '#CBD5E1', lineHeight: 1.35 }}>
-            Exit timestamp stamped on backend at:
+          <h2 style={{ fontSize: '1.45rem', fontWeight: '900', color: '#0F172A', margin: '0 0 0.5rem', letterSpacing: '-0.02em' }}>
+            Location Access Required
+          </h2>
+          <p style={{ fontSize: '0.85rem', color: '#64748B', lineHeight: '1.55', margin: '0 0 1.5rem', fontWeight: '600' }}>
+            To access the <strong>CA Buddy Web Admin Portal</strong>, device location permissions must be enabled. Please enable location access in your browser to proceed.
           </p>
-          <div style={{ fontSize: '0.9rem', fontWeight: '800', color: '#FACC15', marginTop: '0.35rem' }}>
-            ⏱️ {logoutToast.time}
-          </div>
-        </div>
-      )}
 
-      {/* ── Modal: Document Previewer (PDF & Image Viewer) ── */}
-      {viewingDoc && (
-        <div className="modal-overlay" onClick={() => setViewingDoc(null)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h4>Document Evidence Viewer</h4>
-                <p style={{ fontSize: '0.725rem', color: '#64748B' }}>{viewingDoc.fileName} • {viewingDoc.fileSize || 'Verified Document'}</p>
-              </div>
-              <button className="close-btn" onClick={() => setViewingDoc(null)}>✕</button>
-            </div>
-
-            <div className="doc-viewer-container">
-              {viewingDoc.fileType?.includes('image') || (viewingDoc.fileData && viewingDoc.fileData.startsWith('data:image')) ? (
-                <img 
-                  src={viewingDoc.fileData || viewingDoc.sampleFileUrl || 'https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=600&auto=format&fit=crop&q=80'} 
-                  alt="Audit Evidence" 
-                  className="doc-viewer-img"
-                />
-              ) : (
-                <div className="doc-viewer-pdf-frame">
-                  <div style={{ width: 56, height: 56, borderRadius: '16px', background: '#FEF2F2', color: '#DC2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '0.75rem' }}>
-                    📄
-                  </div>
-                  <h5 style={{ fontSize: '0.95rem', fontWeight: '800', color: '#0F172A' }}>{viewingDoc.fileName}</h5>
-                  <p style={{ fontSize: '0.75rem', color: '#64748B', marginTop: '4px', maxWidth: '280px' }}>
-                    Official PDF Audit Verification Document certified by the Robot Backend Vault.
-                  </p>
-                  <a 
-                    href={viewingDoc.fileData || viewingDoc.sampleFileUrl || '#'} 
-                    target="_blank" 
-                    rel="noreferrer"
-                    style={{ textDecoration: 'none', width: '100%', marginTop: '1rem' }}
-                  >
-                    <button type="button" className="btn-pill-primary">
-                      📥 Open / Download Full PDF
-                    </button>
-                  </a>
-                </div>
-              )}
-
-              <div style={{ width: '100%', background: '#F8FAFC', padding: '0.65rem 0.85rem', borderRadius: '12px', border: '1px solid #E2E8F0', fontSize: '0.725rem', color: '#475569' }}>
-                <div>📌 <strong>Title / Category:</strong> {viewingDoc.title}</div>
-                {viewingDoc.remarks && <div style={{ marginTop: 2 }}>📝 <strong>Notes:</strong> {viewingDoc.remarks}</div>}
-                {viewingDoc.auditorName && <div style={{ marginTop: 2 }}>👤 <strong>Submitted By:</strong> {viewingDoc.auditorName}</div>}
-              </div>
-
-              <button 
-                type="button" 
-                className="btn-pill-primary"
-                style={{ marginTop: '0.35rem' }}
-                onClick={() => setViewingDoc(null)}
-              >
-                Close Viewer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Modal: Manager Decides User Role ── */}
-      {editingRoleUser && (
-        <div className="modal-overlay" onClick={() => setEditingRoleUser(null)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h4>Decide User Role & Permissions</h4>
-                <p style={{ fontSize: '0.725rem', color: '#64748B' }}>User: <strong>{editingRoleUser.name}</strong></p>
-              </div>
-              <button className="close-btn" onClick={() => setEditingRoleUser(null)}>✕</button>
-            </div>
-
-            <form onSubmit={handleSaveUserRole} className="auth-form-stack">
-              <div>
-                <label className="sub-risk-label">Select Designated Auditor Role:</label>
-                <select 
-                  className="unit-select-custom"
-                  value={selectedRoleTitle}
-                  onChange={(e) => setSelectedRoleTitle(e.target.value)}
-                >
-                  {AUDITOR_ROLES.map((roleOpt, idx) => (
-                    <option key={idx} value={roleOpt}>{roleOpt}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Assigned Organizational Unit:</label>
-                <button 
-                  type="button"
-                  className="unit-picker-trigger-btn"
-                  onClick={() => setUnitPickerModal({
-                    title: 'Select Designated Unit',
-                    subtitle: `Assign organizational unit to ${editingRoleUser.name}`,
-                    allowAll: false,
-                    currentValue: selectedRoleUnit,
-                    onSelect: (val) => setSelectedRoleUnit(val)
-                  })}
-                >
-                  <div className="unit-trigger-text">
-                    <span className="unit-trigger-sub">Assigned Unit</span>
-                    <strong className="unit-trigger-val">{selectedRoleUnit}</strong>
-                  </div>
-                  <svg className="unit-trigger-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <polyline points="6 9 12 15 18 9"/>
-                  </svg>
-                </button>
-              </div>
-
-              <button type="submit" className="btn-pill-primary" style={{ marginTop: '0.5rem' }}>
-                Save & Enforce Role
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Modal: Manager Assigns Work ── */}
-      {showAssignModal && (
-        <div className="modal-overlay" onClick={() => setShowAssignModal(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h4>Assign Work to Field Auditor</h4>
-              <button className="close-btn" onClick={() => setShowAssignModal(false)}>✕</button>
-            </div>
-
-            <form onSubmit={handleCreateAssignment} className="auth-form-stack">
-              <div>
-                <label className="sub-risk-label">Select Field Auditor:</label>
-                <select 
-                  className="unit-select-custom"
-                  style={{ marginBottom: 0 }}
-                  value={assignTargetUserId}
-                  onChange={(e) => setAssignTargetUserId(e.target.value)}
-                >
-                  {(managerTeamUsers.length > 0 ? managerTeamUsers : (usersDb.filter(u => u.role === 'USER').length > 0 ? usersDb.filter(u => u.role === 'USER') : usersDb)).map(user => (
-                    <option key={user.id} value={user.id}>
-                      {user.name} ({user.roleTitle || 'Auditor'})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Target Organizational Unit:</label>
-                <button 
-                  type="button"
-                  className="unit-picker-trigger-btn"
-                  onClick={() => setUnitPickerModal({
-                    title: 'Select Target Unit',
-                    subtitle: 'Assign work to department unit',
-                    allowAll: false,
-                    currentValue: assignUnit,
-                    onSelect: (val) => setAssignUnit(val)
-                  })}
-                >
-                  <div className="unit-trigger-text">
-                    <span className="unit-trigger-sub">Target Unit</span>
-                    <strong className="unit-trigger-val">{assignUnit}</strong>
-                  </div>
-                  <svg className="unit-trigger-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <polyline points="6 9 12 15 18 9"/>
-                  </svg>
-                </button>
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Task Title / Audit Scope:</label>
-                <input 
-                  type="text" 
-                  className="input-pill-field" 
-                  style={{ padding: '0.75rem 1rem' }}
-                  placeholder="e.g. Day-End Cash & Token Physical Verification"
-                  value={assignTaskTitle}
-                  onChange={(e) => setAssignTaskTitle(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Manager Specific Instructions:</label>
-                <textarea 
-                  rows="2"
-                  style={{ width: '100%', padding: '0.65rem', borderRadius: '10px', border: '1px solid var(--border-input)', fontSize: '0.8rem' }}
-                  placeholder="Instructions for auditor regarding vouchers, token tallies..."
-                  value={assignInstructions}
-                  onChange={(e) => setAssignInstructions(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Target Completion Deadline:</label>
-                <input 
-                  type="text" 
-                  className="input-pill-field" 
-                  style={{ padding: '0.75rem 1rem' }}
-                  placeholder="e.g. Today, 05:30 PM"
-                  value={assignDeadline}
-                  onChange={(e) => setAssignDeadline(e.target.value)}
-                />
-              </div>
-
-              <button type="submit" className="btn-pill-primary" style={{ marginTop: '0.5rem' }}>
-                Dispatch Assignment
-              </button>
-            </form>
-
-          </div>
-        </div>
-      )}
-
-      {/* ── Modal: User Provisioning ── */}
-      {showCreateUserModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateUserModal(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h4>Create Account</h4>
-              <button className="close-btn" onClick={() => setShowCreateUserModal(false)}>✕</button>
-            </div>
-
-            <form onSubmit={handleCreateUser} className="auth-form-stack">
-              <div>
-                <label className="sub-risk-label">Full Name:</label>
-                <input 
-                  type="text" 
-                  className="input-pill-field" 
-                  style={{ padding: '0.75rem 1rem' }}
-                  placeholder="e.g. Ramesh Babu, ACA"
-                  value={newUserName}
-                  onChange={(e) => setNewUserName(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Login Email ID:</label>
-                <input 
-                  type="email" 
-                  className="input-pill-field" 
-                  style={{ padding: '0.75rem 1rem' }}
-                  placeholder="e.g. ramesh@eluc"
-                  value={newUserEmail}
-                  onChange={(e) => setNewUserEmail(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Initial Password:</label>
-                <input 
-                  type="text" 
-                  className="input-pill-field" 
-                  style={{ padding: '0.75rem 1rem' }}
-                  value={newUserPassword}
-                  onChange={(e) => setNewUserPassword(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Designation & Role:</label>
-                <select 
-                  className="unit-select-custom"
-                  style={{ marginBottom: 0 }}
-                  value={newUserRoleTitle}
-                  onChange={(e) => setNewUserRoleTitle(e.target.value)}
-                >
-                  <option value="Field Auditor">Field Auditor</option>
-                  <option value="Junior Auditor">Junior Auditor</option>
-                  <option value="Senior Field Staff">Senior Field Staff</option>
-                  <option value="Lead Auditor">Lead Auditor</option>
-                  <option value="Compliance Officer">Compliance Officer</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="sub-risk-label">Assigned Organizational Unit:</label>
-                <button 
-                  type="button"
-                  className="unit-picker-trigger-btn"
-                  onClick={() => setUnitPickerModal({
-                    title: 'Select User Unit',
-                    subtitle: 'Assign default unit to new user account',
-                    allowAll: false,
-                    currentValue: newUserUnit,
-                    onSelect: (val) => setNewUserUnit(val)
-                  })}
-                >
-                  <div className="unit-trigger-text">
-                    <span className="unit-trigger-sub">Assigned Unit</span>
-                    <strong className="unit-trigger-val">{newUserUnit}</strong>
-                  </div>
-                  <svg className="unit-trigger-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <polyline points="6 9 12 15 18 9"/>
-                  </svg>
-                </button>
-              </div>
-
-              <button type="submit" className="btn-pill-primary" style={{ marginTop: '0.5rem' }}>
-                Create Account
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Modal: Forgot Password ── */}
-      {showForgotModal && (
-        <div className="modal-overlay" onClick={() => setShowForgotModal(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h4>Account Recovery</h4>
-              <button className="close-btn" onClick={() => setShowForgotModal(false)}>✕</button>
-            </div>
-            {recoverySuccess ? (
-              <div style={{ textAlign: 'center', padding: '1rem 0' }}>
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#ECFDF5', color: '#10B981', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 0.5rem', fontSize: '1.25rem', fontWeight: 'bold' }}>✓</div>
-                <h5 style={{ fontSize: '0.95rem', color: '#0F172A', marginBottom: '0.25rem' }}>Reset Instructions Dispatched</h5>
-                <p style={{ fontSize: '0.75rem', color: '#64748B' }}>Contact your department manager or check email for access PIN.</p>
-              </div>
-            ) : (
-              <form onSubmit={(e) => { e.preventDefault(); setRecoverySuccess(true); setTimeout(() => { setShowForgotModal(false); setRecoverySuccess(false); }, 1800); }}>
-                <p style={{ fontSize: '0.8rem', color: '#64748B', marginBottom: '1rem' }}>
-                  Enter your registered work email or login ID to request an administrator password reset.
-                </p>
-                <input 
-                  type="text" 
-                  className="input-pill-field"
-                  style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}
-                  placeholder="Work Email or Login ID"
-                  value={recoveryEmail}
-                  onChange={(e) => setRecoveryEmail(e.target.value)}
-                  required
-                />
-                <button type="submit" className="btn-pill-primary">
-                  Request Manager Reset
-                </button>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── Universal In-App Unit Picker Bottom Sheet Modal (No OS Overflows) ── */}
-      {unitPickerModal && (
-        <div className="modal-overlay" onClick={() => setUnitPickerModal(null)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '85%' }}>
-            <div className="modal-header">
-              <div>
-                <h4>🏢 {unitPickerModal.title}</h4>
-                <p style={{ fontSize: '0.725rem', color: '#64748B', marginTop: 2 }}>{unitPickerModal.subtitle}</p>
-              </div>
-              <button className="close-btn" onClick={() => setUnitPickerModal(null)}>✕</button>
-            </div>
-
-            <div className="unit-picker-list">
-              {unitPickerModal.allowAll && (
-                <div 
-                  className={`unit-picker-item ${unitPickerModal.currentValue === 'ALL' ? 'active' : ''}`}
-                  onClick={() => {
-                    unitPickerModal.onSelect('ALL');
-                    setUnitPickerModal(null);
-                  }}
-                >
-                  <div className="unit-item-badge">🌐</div>
-                  <div className="unit-item-content">
-                    <span className="unit-item-title">All 8 Organizational Units</span>
-                    {unitPickerModal.currentValue === 'ALL' && (
-                      <span className="unit-item-check">✓ Active Scope</span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {ORGANIZATIONAL_UNITS.map((unitName, idx) => {
-                const isSelected = unitPickerModal.currentValue === unitName;
-                return (
-                  <div 
-                    key={idx}
-                    className={`unit-picker-item ${isSelected ? 'active' : ''}`}
-                    onClick={() => {
-                      unitPickerModal.onSelect(unitName);
-                      setUnitPickerModal(null);
-                    }}
-                  >
-                    <div className="unit-item-badge">#{idx + 1}</div>
-                    <div className="unit-item-content">
-                      <span className="unit-item-title">{unitName}</span>
-                      {isSelected && (
-                        <span className="unit-item-check">✓ Selected</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Modal: Quick Login / Role Switcher (from Widget Button) ── */}
-      {showQuickLoginModal && (
-        <div className="modal-overlay" onClick={() => setShowQuickLoginModal(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h4>🔑 Authentication & Role Switcher</h4>
-                <p style={{ fontSize: '0.725rem', color: '#64748B' }}>
-                  {isLoggedIn ? `Currently logged in as ${currentUser?.name}` : 'Select a demo role or enter credentials'}
-                </p>
-              </div>
-              <button className="close-btn" onClick={() => setShowQuickLoginModal(false)}>✕</button>
-            </div>
-
-            <div style={{ marginBottom: '1rem' }}>
-              <label className="sub-risk-label" style={{ marginBottom: '0.5rem' }}>1-Click Demo Login as Role:</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={() => handleQuickLoginRole('SUPER_ADMIN')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.75rem 0.95rem',
-                    borderRadius: '14px',
-                    border: '1.5px solid #DDD6FE',
-                    background: '#F5F3FF',
-                    cursor: 'pointer',
-                    textAlign: 'left'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                    <span style={{ fontSize: '1.25rem' }}>👑</span>
-                    <div>
-                      <strong style={{ fontSize: '0.85rem', color: '#5B21B6', display: 'block' }}>Super Administrator</strong>
-                      <span style={{ fontSize: '0.685rem', color: '#6D28D9' }}>Full Vault Access, Evidence PDFs & Accounts</span>
-                    </div>
-                  </div>
-                  <span style={{ fontSize: '0.725rem', color: '#7C3AED', fontWeight: '800' }}>Enter →</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleQuickLoginRole('MANAGER')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.75rem 0.95rem',
-                    borderRadius: '14px',
-                    border: '1.5px solid #BFDBFE',
-                    background: '#EFF6FF',
-                    cursor: 'pointer',
-                    textAlign: 'left'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                    <span style={{ fontSize: '1.25rem' }}>💼</span>
-                    <div>
-                      <strong style={{ fontSize: '0.85rem', color: '#1E40AF', display: 'block' }}>Department Manager</strong>
-                      <span style={{ fontSize: '0.685rem', color: '#256BF5' }}>Decide Auditor Roles, Assign Tasks & Remarks</span>
-                    </div>
-                  </div>
-                  <span style={{ fontSize: '0.725rem', color: '#256BF5', fontWeight: '800' }}>Enter →</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleQuickLoginRole('USER')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.75rem 0.95rem',
-                    borderRadius: '14px',
-                    border: '1.5px solid #A7F3D0',
-                    background: '#ECFDF5',
-                    cursor: 'pointer',
-                    textAlign: 'left'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                    <span style={{ fontSize: '1.25rem' }}>📋</span>
-                    <div>
-                      <strong style={{ fontSize: '0.85rem', color: '#065F46', display: 'block' }}>Field Auditor</strong>
-                      <span style={{ fontSize: '0.685rem', color: '#059669' }}>Sub-Risk Reports, Vault PDF Uploads & Shifts</span>
-                    </div>
-                  </div>
-                  <span style={{ fontSize: '0.725rem', color: '#059669', fontWeight: '800' }}>Enter →</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="or-divider">OR USE CUSTOM CREDENTIALS</div>
-
-            <form onSubmit={(e) => { e.preventDefault(); setShowQuickLoginModal(false); handleSignIn(e); }} className="auth-form-stack">
-              <input
-                type="text"
-                className="input-pill-field"
-                style={{ padding: '0.75rem 1rem' }}
-                placeholder="Login ID / Email"
-                value={loginEmail}
-                onChange={(e) => setLoginEmail(e.target.value)}
-              />
-              <input
-                type="password"
-                className="input-pill-field"
-                style={{ padding: '0.75rem 1rem' }}
-                placeholder="Password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-              />
-              <button type="submit" className="btn-pill-primary">
-                Sign In With Credentials
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Modal: MUM (Monthly Unit Monitoring & Minutes of Meeting) ── */}
-      {showMumModal && (
-        <div className="modal-overlay" onClick={() => setShowMumModal(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '88%' }}>
-            <div className="modal-header">
-              <div>
-                <h4>🏛️ MUM — Monthly Unit Monitoring</h4>
-                <p style={{ fontSize: '0.725rem', color: '#64748B' }}>
-                  Minutes of Users Meeting & 8-Unit Continuous Governance
-                </p>
-              </div>
-              <button className="close-btn" onClick={() => setShowMumModal(false)}>✕</button>
-            </div>
-
-            <div className="mum-kpi-summary">
-              <div className="mum-kpi-card">
-                <span>Monitored</span>
-                <strong>8 Units</strong>
-              </div>
-              <div className="mum-kpi-card">
-                <span>Status</span>
-                <strong style={{ color: '#10B981' }}>100% Active</strong>
-              </div>
-              <div className="mum-kpi-card">
-                <span>MUM Records</span>
-                <strong style={{ color: '#256BF5' }}>{mumRecords.length} Logged</strong>
-              </div>
-            </div>
-
-            {/* MUM Internal Sub-Tabs */}
-            <div className="dash-tab-strip" style={{ marginBottom: '0.85rem' }}>
-              <button 
-                type="button"
-                className={`dash-tab-btn ${mumTab === 'units_matrix' ? 'active' : ''}`}
-                onClick={() => setMumTab('units_matrix')}
-              >
-                📊 Unit Status Matrix
-              </button>
-              <button 
-                type="button"
-                className={`dash-tab-btn ${mumTab === 'log_minutes' ? 'active' : ''}`}
-                onClick={() => setMumTab('log_minutes')}
-              >
-                📝 Log MUM Minutes
-              </button>
-              <button 
-                type="button"
-                className={`dash-tab-btn ${mumTab === 'records' ? 'active' : ''}`}
-                onClick={() => setMumTab('records')}
-              >
-                📜 Records ({mumRecords.length})
-              </button>
-            </div>
-
-            <div className="mum-modal-body">
-              {/* Tab 1: Unit Status Matrix */}
-              {mumTab === 'units_matrix' && (
-                <div>
-                  <p style={{ fontSize: '0.725rem', color: '#64748B', marginBottom: '0.65rem' }}>
-                    Continuous monthly audit health & risk matrix across official units:
-                  </p>
-
-                  {ORGANIZATIONAL_UNITS.map((unitName, idx) => {
-                    const unitUsers = usersDb.filter(u => u.unit === unitName);
-                    const unitComplaints = complaintsDb.filter(c => c.unit === unitName);
-                    const unitMinutes = mumRecords.filter(m => m.unit === unitName);
-                    const isCompliant = unitComplaints.filter(c => c.urgency === 'CRITICAL').length === 0;
-
-                    return (
-                      <div key={idx} className="mum-unit-item-card">
-                        <div className="mum-unit-top">
-                          <div>
-                            <span className="user-unit-tag" style={{ marginBottom: 3 }}>Unit #{idx + 1}</span>
-                            <h6 className="mum-unit-title">{unitName}</h6>
-                          </div>
-                          <span className={`mum-status-chip ${isCompliant ? 'mum-status-active' : 'mum-status-review'}`}>
-                            {isCompliant ? '● Compliant' : '⚠️ Action Required'}
-                          </span>
-                        </div>
-
-                        <div className="mum-unit-meta-grid">
-                          <div>👥 Staff: <strong>{unitUsers.length > 0 ? `${unitUsers.length} Auditors` : '1 Assigned'}</strong></div>
-                          <div>📑 Evidence: <strong>{unitComplaints.length} Records</strong></div>
-                          <div>🗓️ MUM Minutes: <strong>{unitMinutes.length > 0 ? `${unitMinutes.length} Logged` : 'Scheduled'}</strong></div>
-                          <div>🔒 Status: <strong style={{ color: isCompliant ? '#059669' : '#D97706' }}>Verified</strong></div>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.4rem' }}>
-                          <button
-                            type="button"
-                            style={{
-                              background: '#F1F5F9',
-                              border: '1px solid #CBD5E1',
-                              padding: '0.25rem 0.55rem',
-                              borderRadius: '6px',
-                              fontSize: '0.65rem',
-                              fontWeight: '700',
-                              cursor: 'pointer',
-                              color: '#0F172A'
-                            }}
-                            onClick={() => {
-                              setMumMinutesUnit(unitName);
-                              setMumTab('log_minutes');
-                            }}
-                          >
-                            + Record Minutes
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Tab 2: Log Meeting Minutes */}
-              {mumTab === 'log_minutes' && (
-                <form onSubmit={handleSaveMumMinutes} className="mum-form-grid">
-                  <div>
-                    <label className="sub-risk-label">Select Department / Organizational Unit:</label>
-                    <button 
-                      type="button"
-                      className="unit-picker-trigger-btn"
-                      onClick={() => setUnitPickerModal({
-                        title: 'Select Unit for MUM Minutes',
-                        subtitle: 'Select department unit for minutes entry',
-                        allowAll: false,
-                        currentValue: mumMinutesUnit,
-                        onSelect: (val) => setMumMinutesUnit(val)
-                      })}
-                    >
-                      <div className="unit-trigger-text">
-                        <span className="unit-trigger-sub">Target Unit</span>
-                        <strong className="unit-trigger-val">{mumMinutesUnit}</strong>
-                      </div>
-                      <svg className="unit-trigger-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                        <polyline points="6 9 12 15 18 9"/>
-                      </svg>
-                    </button>
-                  </div>
-
-                  <div>
-                    <label className="sub-risk-label">Meeting Agenda / Audit Objective:</label>
-                    <input
-                      type="text"
-                      className="input-pill-field"
-                      style={{ padding: '0.75rem 1rem' }}
-                      placeholder="e.g. Monthly Concurrent Token & Register Audit Review"
-                      value={mumAgenda}
-                      onChange={(e) => setMumAgenda(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="sub-risk-label">Key Resolutions & Action Decisions:</label>
-                    <textarea
-                      rows="3"
-                      style={{
-                        width: '100%',
-                        padding: '0.65rem',
-                        borderRadius: '10px',
-                        border: '1.5px solid var(--border-input)',
-                        fontSize: '0.8rem',
-                        fontFamily: 'inherit',
-                        outline: 'none'
-                      }}
-                      placeholder="Detail the decisions reached, corrective protocols agreed, and audit notes..."
-                      value={mumDecisions}
-                      onChange={(e) => setMumDecisions(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-                    <div>
-                      <label className="sub-risk-label">Responsible Person:</label>
-                      <input
-                        type="text"
-                        className="input-pill-field"
-                        style={{ padding: '0.65rem 0.85rem', fontSize: '0.785rem' }}
-                        placeholder="e.g. Lead Auditor"
-                        value={mumActionOwner}
-                        onChange={(e) => setMumActionOwner(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="sub-risk-label">Target Due Date:</label>
-                      <input
-                        type="text"
-                        className="input-pill-field"
-                        style={{ padding: '0.65rem 0.85rem', fontSize: '0.785rem' }}
-                        value={mumDueDate}
-                        onChange={(e) => setMumDueDate(e.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  {mumSubmitSuccess && (
-                    <div style={{ background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#065F46', padding: '0.65rem', borderRadius: '12px', textAlign: 'center', fontSize: '0.75rem', fontWeight: '700' }}>
-                      ✓ MUM Meeting Minutes Certified & Stamped into Audit Log!
-                    </div>
-                  )}
-
-                  <button type="submit" className="btn-pill-primary" style={{ marginTop: '0.35rem' }}>
-                    📜 Save & Stamp MUM Minutes
-                  </button>
-                </form>
-              )}
-
-              {/* Tab 3: Records Archive */}
-              {mumTab === 'records' && (
-                <div>
-                  <p style={{ fontSize: '0.725rem', color: '#64748B', marginBottom: '0.65rem' }}>
-                    Historical Minutes of Users Meeting (MUM) entries and committee decisions:
-                  </p>
-
-                  {mumRecords.map(rec => (
-                    <div key={rec.id} className="mum-timeline-card">
-                      <div className="mum-timeline-header">
-                        <span className="user-unit-tag">{rec.unit}</span>
-                        <span style={{ fontSize: '0.65rem', fontWeight: '800', background: '#ECFDF5', color: '#047857', padding: '0.15rem 0.45rem', borderRadius: '6px', border: '1px solid #A7F3D0' }}>
-                          ● {rec.status}
-                        </span>
-                      </div>
-                      <h6 className="mum-timeline-agenda">{rec.agenda}</h6>
-                      <p className="mum-timeline-desc">{rec.decisions}</p>
-                      <div className="mum-timeline-footer">
-                        <span>👤 Owner: <strong>{rec.actionOwner}</strong></span>
-                        <span>🗓️ <strong>{rec.date}</strong></span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Background Click-Backdrop when Widget is Open (After Login) ── */}
-      {isLoggedIn && isWidgetOpen && (
-        <div className="widget-click-backdrop" onClick={() => setIsWidgetOpen(false)} />
-      )}
-
-      {/* ── Right Bottom Corner Widget Button & 4-Sections Menu (Only Shown After Login) ── */}
-      {isLoggedIn && (
-        <div className="corner-widget-container">
-          {isWidgetOpen && (
-            <div className="widget-popup-menu" onClick={(e) => e.stopPropagation()}>
-              <div className="widget-menu-header">
-                <div className="widget-header-title">
-                  <span style={{ fontSize: '1rem' }}>⚡</span>
-                  <div>
-                    <h5>Operations Widget</h5>
-                    <span className="widget-header-sub">4 Quick Sections</span>
-                  </div>
-                </div>
-                <button 
-                  type="button" 
-                  className="widget-close-mini"
-                  onClick={() => setIsWidgetOpen(false)}
-                  title="Close Widget Menu"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="widget-sections-stack">
-                {/* Section 1: Login Button */}
-                <button 
-                  type="button" 
-                  className="widget-section-btn btn-login"
-                  onClick={() => {
-                    setIsWidgetOpen(false);
-                    setShowQuickLoginModal(true);
-                  }}
-                >
-                  <div className="widget-icon-pill login">🔑</div>
-                  <div className="widget-item-content">
-                    <span className="widget-item-name">Login</span>
-                    <span className="widget-item-desc">
-                      Switch account ({currentUser?.name?.split(' ')[0]})
-                    </span>
-                  </div>
-                  <span className="widget-arrow-icon">→</span>
-                </button>
-
-                {/* Section 2: Log out Button */}
-                <button 
-                  type="button" 
-                  className="widget-section-btn btn-logout"
-                  onClick={() => {
-                    setIsWidgetOpen(false);
-                    handleLogout();
-                  }}
-                >
-                  <div className="widget-icon-pill logout">🚪</div>
-                  <div className="widget-item-content">
-                    <span className="widget-item-name">Log out</span>
-                    <span className="widget-item-desc">
-                      Stamp exit time & end session
-                    </span>
-                  </div>
-                  <span className="widget-arrow-icon">→</span>
-                </button>
-
-                {/* Section 3: MUM Button */}
-                <button 
-                  type="button" 
-                  className="widget-section-btn btn-mum"
-                  onClick={() => {
-                    setIsWidgetOpen(false);
-                    setShowMumModal(true);
-                  }}
-                >
-                  <div className="widget-icon-pill mum">🏛️</div>
-                  <div className="widget-item-content">
-                    <span className="widget-item-name">MUM</span>
-                    <span className="widget-item-desc">Monthly Unit Monitoring & Minutes</span>
-                  </div>
-                  <span className="widget-arrow-icon">→</span>
-                </button>
-
-                {/* Section 4: Create Task Button */}
-                <button 
-                  type="button" 
-                  className="widget-section-btn btn-createtask"
-                  onClick={() => {
-                    setIsWidgetOpen(false);
-                    if (!assignTargetUserId && usersDb.length > 0) {
-                      const fallbackAuditor = usersDb.find(u => u.role === 'USER') || usersDb[0];
-                      setAssignTargetUserId(fallbackAuditor.id);
-                    }
-                    setShowAssignModal(true);
-                  }}
-                >
-                  <div className="widget-icon-pill createtask">📋</div>
-                  <div className="widget-item-content">
-                    <span className="widget-item-name">Create Task</span>
-                    <span className="widget-item-desc">Dispatch audit task & instructions</span>
-                  </div>
-                  <span className="widget-arrow-icon">→</span>
-                </button>
-              </div>
+          {locationError && (
+            <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', color: '#B91C1C', padding: '0.75rem 1rem', borderRadius: '12px', fontSize: '0.82rem', marginBottom: '1.25rem', fontWeight: '700' }}>
+              ⚠️ {locationError}
             </div>
           )}
 
-          {/* Floating Action Trigger Button (Right Bottom Corner) */}
-          <button 
-            type="button"
-            className={`corner-widget-fab ${isWidgetOpen ? 'open' : ''}`}
-            onClick={() => setIsWidgetOpen(!isWidgetOpen)}
-            title="Quick Operations Widget"
-            aria-label="Toggle Quick Operations Widget"
+          <button
+            onClick={requestLocationAccess}
+            disabled={isCheckingLocation}
+            style={{ width: '100%', padding: '0.9rem', background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)', color: '#FFFFFF', border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)' }}
           >
-            <div className="fab-icon-wrapper">
-              {isWidgetOpen ? (
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              ) : (
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                  <rect x="3" y="3" width="7" height="7" rx="1.5" />
-                  <rect x="14" y="3" width="7" height="7" rx="1.5" />
-                  <rect x="14" y="14" width="7" height="7" rx="1.5" />
-                  <rect x="3" y="14" width="7" height="7" rx="1.5" />
-                </svg>
-              )}
-            </div>
-            {!isWidgetOpen && <span className="fab-badge-chip">4</span>}
+            {isCheckingLocation ? 'Checking GPS Location...' : '📍 Enable / Allow Location Access →'}
           </button>
         </div>
-      )}
+      </div>
+    );
+  }
 
+  // Clean Web Admin Login Portal (Appears only after location is enabled)
+  if (!isLoggedIn) {
+    return (
+      <div className="admin-panel-shell" style={{ justifyContent: 'center', alignItems: 'center', background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 100%)', padding: '2rem' }}>
+        <div style={{ background: '#FFFFFF', borderRadius: '24px', padding: '2.5rem', width: '100%', maxWidth: '420px', boxShadow: '0 25px 50px rgba(0, 0, 0, 0.35)' }}>
+          <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+            <img src="/logo.jpeg" alt="CA Buddy Logo" className="admin-brand-logo-img" style={{ width: '76px', height: '76px', marginBottom: '1rem', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }} />
+            <h2 style={{ fontSize: '1.5rem', fontWeight: '900', color: '#0F172A', margin: '0 0 0.35rem', letterSpacing: '-0.02em' }}>CABuddy Web Admin</h2>
+            <p style={{ fontSize: '0.85rem', color: '#64748B', margin: 0, fontWeight: '600' }}>TTD Enterprise Concurrent Audit Portal</p>
+          </div>
 
-      {/* ── Modal: PWA Web App Installation Guide ── */}
-      {showPwaModal && (
-        <div className="modal-overlay" onClick={() => setShowPwaModal(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h4>📥 Install CA Buddy Web App</h4>
-                <p style={{ fontSize: '0.725rem', color: '#64748B' }}>Standalone native experience for macOS, Windows, iOS & Android</p>
-              </div>
-              <button className="close-btn" onClick={() => setShowPwaModal(false)}>✕</button>
+          {loginError && (
+            <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', color: '#B91C1C', padding: '0.75rem 1rem', borderRadius: '12px', fontSize: '0.85rem', marginBottom: '1.25rem', textAlign: 'center', fontWeight: '700' }}>
+              ⚠️ {loginError}
+            </div>
+          )}
+
+          <form onSubmit={handleLoginSubmit}>
+            <div style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: '800', color: '#475569', textTransform: 'uppercase', marginBottom: '0.4rem', letterSpacing: '0.05em' }}>Admin Email / ID</label>
+              <input
+                type="text"
+                value={loginEmail}
+                onChange={e => setLoginEmail(e.target.value)}
+                style={{ width: '100%', padding: '0.8rem 1rem', borderRadius: '12px', border: '1.5px solid #CBD5E1', fontSize: '0.92rem', outline: 'none', background: '#F8FAFC' }}
+                placeholder="Enter admin ID"
+                required
+              />
+            </div>
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: '800', color: '#475569', textTransform: 'uppercase', marginBottom: '0.4rem', letterSpacing: '0.05em' }}>Password</label>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                style={{ width: '100%', padding: '0.8rem 1rem', borderRadius: '12px', border: '1.5px solid #CBD5E1', fontSize: '0.92rem', outline: 'none', background: '#F8FAFC' }}
+                placeholder="••••••••"
+                required
+              />
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', margin: '0.5rem 0 1.25rem' }}>
-              <div style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: '14px', padding: '0.85rem' }}>
-                <strong style={{ fontSize: '0.825rem', color: '#0F172A', display: 'block', marginBottom: '4px' }}>💻 Desktop (Chrome, Edge & Brave):</strong>
-                <p style={{ fontSize: '0.75rem', color: '#475569', lineHeight: 1.4 }}>
-                  Click the <strong>Install icon (⊕ or 💻)</strong> on the right side of the browser address bar, or click <strong>Install App</strong> in the top navigation bar.
-                </p>
-              </div>
-
-              <div style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: '14px', padding: '0.85rem' }}>
-                <strong style={{ fontSize: '0.825rem', color: '#0F172A', display: 'block', marginBottom: '4px' }}>📱 iOS (iPhone & iPad Safari):</strong>
-                <p style={{ fontSize: '0.75rem', color: '#475569', lineHeight: 1.4 }}>
-                  Tap the <strong>Share icon</strong> at the bottom of Safari, scroll down and tap <strong>"Add to Home Screen"</strong>.
-                </p>
-              </div>
-
-              <div style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: '14px', padding: '0.85rem' }}>
-                <strong style={{ fontSize: '0.825rem', color: '#0F172A', display: 'block', marginBottom: '4px' }}>🤖 Android (Chrome):</strong>
-                <p style={{ fontSize: '0.75rem', color: '#475569', lineHeight: 1.4 }}>
-                  Tap the three-dots menu (⋮) at the top-right of Chrome, then select <strong>"Install app"</strong> or <strong>"Add to Home screen"</strong>.
-                </p>
-              </div>
-            </div>
-
-            <button 
-              type="button" 
-              className="btn-pill-primary"
-              onClick={() => {
-                if (deferredPrompt) {
-                  deferredPrompt.prompt();
-                  setShowPwaModal(false);
-                } else {
-                  setShowPwaModal(false);
-                }
-              }}
+            <button
+              type="submit"
+              style={{ width: '100%', padding: '0.9rem', background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)', color: '#FFFFFF', border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)' }}
             >
-              {deferredPrompt ? '🚀 Launch Direct Installation' : '✓ Got It / Close'}
+              Sign In to Web Admin →
             </button>
+          </form>
+
+          <div style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid #F1F5F9', textAlign: 'center' }}>
+            <span style={{ fontSize: '0.75rem', color: '#94A3B8', fontWeight: '600' }}>🔒 Authorized TTD Audit System Personnel Only</span>
           </div>
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {/* ── Super Admin Modal: Selected User Complete Details Dossier ── */}
+  const completedCount = all11Records.filter(r => {
+    const target = String(r.field8_workToBeAchieved || '').toLowerCase();
+    const logout = String(r.field11_logoutTime || '').toLowerCase();
+    return target.includes('completed') || target.includes('verified') || (logout !== 'session active' && logout !== '—' && logout.trim() !== '');
+  }).length;
+  const inProgressCount = all11Records.length - completedCount;
+  const completedPercent = Math.round((completedCount / (all11Records.length || 1)) * 100);
 
-      {selectedUserDetailModal && (
-        <div className="dossier-modal-backdrop" onClick={() => setSelectedUserDetailModal(null)}>
-          <div className="dossier-modal-card" onClick={(e) => e.stopPropagation()}>
-            
-            {/* Modal Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1.5px solid #E2E8F0', paddingBottom: '1rem', marginBottom: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-                <div className="admin-user-avatar" style={{ width: 52, height: 52, fontSize: '1.5rem' }}>
-                  {selectedUserDetailModal.role === 'SUPER_ADMIN' ? '👑' : selectedUserDetailModal.role === 'MANAGER' ? '💼' : '👤'}
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '1.2rem', fontWeight: '800', color: '#0F172A', margin: 0 }}>
-                    {selectedUserDetailModal.name}
-                  </h3>
-                  <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 2 }}>
-                    ID: #{selectedUserDetailModal.id} • {selectedUserDetailModal.roleTitle || selectedUserDetailModal.role}
-                  </div>
-                </div>
-              </div>
-
-              <button 
-                type="button" 
-                className="modal-close-btn" 
-                onClick={() => setSelectedUserDetailModal(null)}
-                style={{ fontSize: '1.25rem', background: '#F1F5F9', border: 'none', borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Profile & Credentials Dossier Grid */}
-            <h5 style={{ fontSize: '0.85rem', fontWeight: '800', color: '#0F172A', marginBottom: '0.65rem' }}>
-              📋 Official Profile & Credentials Ledger
-            </h5>
-
-            <div className="user-complete-meta-grid" style={{ marginBottom: '1.5rem' }}>
-              <div className="user-meta-cell">
-                <span className="meta-label">🎓 ICAI / Student Reg. No.</span>
-                <span className="meta-val" style={{ color: '#1D4ED8' }}>{selectedUserDetailModal.studentRegNo || 'FCA / Student N/A'}</span>
-              </div>
-              <div className="user-meta-cell">
-                <span className="meta-label">✉️ Official Email</span>
-                <span className="meta-val">{selectedUserDetailModal.email}</span>
-              </div>
-              <div className="user-meta-cell">
-                <span className="meta-label">📞 Contact Phone</span>
-                <span className="meta-val">{selectedUserDetailModal.phone || '+91 98480 12345'}</span>
-              </div>
-              <div className="user-meta-cell">
-                <span className="meta-label">🏛️ Assigned TTD Unit</span>
-                <span className="meta-val">{selectedUserDetailModal.unit}</span>
-              </div>
-              <div className="user-meta-cell">
-                <span className="meta-label">🏢 Designated Sub-Unit</span>
-                <span className="meta-val">{selectedUserDetailModal.subUnit || 'Central Desk'}</span>
-              </div>
-              <div className="user-meta-cell">
-                <span className="meta-label">👤 Reporting Supervisor</span>
-                <span className="meta-val">
-                  {selectedUserDetailModal.managedBy ? (usersDb.find(m => m.id === selectedUserDetailModal.managedBy)?.name || 'Audit Manager') : 'Executive Apex Admin'}
+  return (
+    <div className="admin-panel-shell">
+      {/* ── Enhanced Professional Executive Header ── */}
+      <header className="admin-navbar">
+        <div className="admin-navbar-inner">
+          {/* Brand Logo & System Title Group */}
+          <div className="admin-brand-group">
+            <img src="/logo.jpeg" alt="CA Buddy Logo" className="admin-brand-logo-img" />
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '1.25rem', fontWeight: '900', color: '#FACC15', letterSpacing: '0.02em' }}>
+                  CA BUDDY
+                </span>
+                <span style={{ background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)', color: '#FFFFFF', fontSize: '0.68rem', fontWeight: '800', padding: '0.2rem 0.6rem', borderRadius: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Base Admin Console
                 </span>
               </div>
-              <div className="user-meta-cell">
-                <span className="meta-label">📅 Date Onboarded</span>
-                <span className="meta-val">{selectedUserDetailModal.joinedDate || '01-Jan-2024'}</span>
-              </div>
-              <div className="user-meta-cell">
-                <span className="meta-label">🔒 Access Permission Level</span>
-                <span className="meta-val">{selectedUserDetailModal.role}</span>
+              <div style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: '600', marginTop: '0.1rem' }}>
+                TTD Apex Concurrent & Internal Audit Management System
               </div>
             </div>
-
-            {/* Submitted Duty Reports by this user */}
-            <h5 style={{ fontSize: '0.85rem', fontWeight: '800', color: '#0F172A', marginBottom: '0.65rem' }}>
-              📝 Daily Audit Duty Sheets Submitted by {selectedUserDetailModal.name}
-            </h5>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-              {dutySubmittedReports
-                .filter(r => 
-                  (selectedUserDetailModal.studentRegNo && r.studentRegNo === selectedUserDetailModal.studentRegNo) ||
-                  (r.fullName && r.fullName.toLowerCase().includes(selectedUserDetailModal.name?.toLowerCase().split(',')[0].trim()))
-                )
-                .map((rep, idx) => (
-                  <div key={rep.id || idx} style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: '14px', padding: '0.85rem 1rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                      <span className="user-unit-tag">{rep.unitDetails} • {rep.subUnitDetails}</span>
-                      <span style={{ fontSize: '0.7rem', fontWeight: '800', color: '#047857', background: '#ECFDF5', padding: '0.2rem 0.5rem', borderRadius: '6px' }}>
-                        ⏱️ {rep.loginTime} - {rep.logoutTime || 'Active Duty'}
-                      </span>
-                    </div>
-
-                    <div style={{ fontSize: '0.75rem', color: '#1E293B', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem', marginTop: '0.4rem' }}>
-                      <div>🎯 <strong>Objective:</strong> {rep.workObjective}</div>
-                      <div>🏆 <strong>EOD Target:</strong> {rep.targetToAchieve}</div>
-                    </div>
-
-                    {rep.caRemarks && (
-                      <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', padding: '0.4rem 0.6rem', borderRadius: '8px', fontSize: '0.725rem', color: '#B45309', marginTop: '0.4rem' }}>
-                        ⚠️ <strong>CA Remarks to Management:</strong> {rep.caRemarks}
-                      </div>
-                    )}
-
-                    <div style={{ fontSize: '0.7rem', color: '#64748B', marginTop: '0.4rem', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>🤝 <strong>POC Name:</strong> {rep.pocName}</span>
-                      <span>📋 Type: <strong>{rep.auditWorkType}</strong></span>
-                      <span>Verified: <strong>{rep.timestamp || 'Server Logged'}</strong></span>
-                    </div>
-                  </div>
-                ))}
-
-              {dutySubmittedReports.filter(r => 
-                (selectedUserDetailModal.studentRegNo && r.studentRegNo === selectedUserDetailModal.studentRegNo) ||
-                (r.fullName && r.fullName.toLowerCase().includes(selectedUserDetailModal.name?.toLowerCase().split(',')[0].trim()))
-              ).length === 0 && (
-                <div style={{ padding: '1rem', background: '#F8FAFC', borderRadius: '12px', textAlign: 'center', color: '#94A3B8', fontSize: '0.8rem' }}>
-                  No duty sheets recorded for this user yet.
-                </div>
-              )}
-            </div>
-
-            {/* Attendance History */}
-            <h5 style={{ fontSize: '0.85rem', fontWeight: '800', color: '#0F172A', marginBottom: '0.65rem' }}>
-              ⏱️ Attendance & Shift Timestamps
-            </h5>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
-              {attendanceLedger
-                .filter(a => a.userId === selectedUserDetailModal.id || a.userEmail === selectedUserDetailModal.email)
-                .map((att, idx) => (
-                  <div key={att.id || idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FFFFFF', border: '1px solid #E2E8F0', padding: '0.6rem 0.85rem', borderRadius: '10px', fontSize: '0.75rem' }}>
-                    <div>
-                      <strong style={{ color: '#0F172A' }}>{att.date || '12-Aug-2026'}</strong>
-                      <span style={{ marginLeft: 8, color: '#64748B' }}>{att.timeWindow || `${att.loginTime} - ${att.logoutTime || 'Active'}`}</span>
-                    </div>
-                    <span style={{ fontWeight: '800', color: att.active ? '#047857' : '#475569', background: att.active ? '#ECFDF5' : '#F1F5F9', padding: '0.2rem 0.5rem', borderRadius: '6px' }}>
-                      {att.active ? '● Active Session' : 'Completed'}
-                    </span>
-                  </div>
-                ))}
-            </div>
-
-            {/* Close / Done Button */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1.5px solid #E2E8F0', paddingTop: '1rem' }}>
-              <button 
-                type="button"
-                className="btn-pill-primary"
-                onClick={() => setSelectedUserDetailModal(null)}
-                style={{ padding: '0.5rem 1.5rem', fontSize: '0.85rem', maxWidth: '180px' }}
-              >
-                Close Dossier
-              </button>
-            </div>
-
           </div>
-        </div>
-      )}
 
-      {/* ── MOM Modal Dialog (Matching Images 1, 2, 3) ── */}
-      {showMomDialog && (
-        <div className="mom-dialog-backdrop" onClick={() => setShowMomDialog(false)}>
-          <div className="mom-dialog-card" onClick={(e) => e.stopPropagation()}>
-            
-            {/* Header */}
-            <div className="mom-dialog-header">
-              <div>
-                <h3>
-                  <span>📄</span>
-                  <span>Create Minutes of Meeting (MOM)</span>
-                </h3>
-                <p>Record meeting details and action items for {currentUser?.name || 'Managing Partner'}</p>
+          {/* Quick Global Search Bar */}
+          <div className="admin-search-box">
+            <svg className="admin-search-icon-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              type="text"
+              className="admin-search-input"
+              placeholder="Search auditor, reg no, unit, work type..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+          </div>
+
+          {/* Clock Widget & User Profile Badge */}
+          <div className="admin-nav-actions">
+            <div style={{ textAlign: 'right', paddingRight: '0.5rem', borderRight: '1px solid #334155' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#F8FAFC', letterSpacing: '0.03em' }}>{currentTimeStr}</div>
+              <div style={{ fontSize: '0.68rem', color: '#34D399', fontWeight: '700' }}>🟢 Server Sync Active</div>
+            </div>
+
+            {/* Clickable Super Admin Profile Badge in Right-Side Corner */}
+            <div
+              className="admin-profile-corner-badge"
+              onClick={() => setShowAdminProfileModal(true)}
+              title="Click to view Super Admin Profile & Login/Logout Session History"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: '#1E293B', padding: '0.45rem 0.85rem', borderRadius: '14px', border: '1px solid #334155', cursor: 'pointer', transition: 'all 0.2s ease' }}
+            >
+              <span style={{ fontSize: '1.1rem' }}>🔑</span>
+              <div style={{ textAlign: 'left' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  {currentUser.name}
+                  <span style={{ fontSize: '0.65rem', background: '#2563EB', color: '#FFFFFF', padding: '0.1rem 0.4rem', borderRadius: '6px', fontWeight: '800' }}>PROFILE</span>
+                </div>
+                <div style={{ fontSize: '0.68rem', color: '#60A5FA', fontWeight: '700' }}>{currentUser.roleTitle}</div>
               </div>
-              <button 
-                type="button" 
-                onClick={() => setShowMomDialog(false)}
-                style={{ background: '#F1F5F9', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', color: '#64748B' }}
+              <button
+                onClick={(e) => { e.stopPropagation(); handleAdminLogout(); }}
+                style={{ background: '#EF4444', color: '#FFFFFF', border: 'none', width: '26px', height: '26px', borderRadius: '8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: '800', display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: '0.2rem' }}
+                title="Sign Out Admin"
               >
                 ✕
               </button>
             </div>
+          </div>
+        </div>
+      </header>
 
-            {/* Sub-tabs: Basic Info | Content | Actions */}
-            <div className="mom-tabs-segmented">
-              <button 
-                type="button"
-                className={`mom-tab-item ${momActiveSubTab === 'basic' ? 'active' : ''}`}
-                onClick={() => setMomActiveSubTab('basic')}
-              >
-                Basic Info
-              </button>
-              <button 
-                type="button"
-                className={`mom-tab-item ${momActiveSubTab === 'content' ? 'active' : ''}`}
-                onClick={() => setMomActiveSubTab('content')}
-              >
-                Content
-              </button>
-              <button 
-                type="button"
-                className={`mom-tab-item ${momActiveSubTab === 'actions' ? 'active' : ''}`}
-                onClick={() => setMomActiveSubTab('actions')}
-              >
-                Actions
-              </button>
+      {/* ── Unified Section Tabs Navigation ── */}
+      <nav className="admin-tab-nav-bar">
+        <div className="admin-tab-nav-inner">
+          <button
+            className={`admin-tab-btn ${adminTab === 'master_10' ? 'active' : ''}`}
+            onClick={() => setAdminTab('master_10')}
+          >
+            📊 Page 1: All User Activity (11-Field Duty Log Master)
+            <span className="admin-tab-counter">{filteredPage1Records.length}</span>
+          </button>
+
+          <button
+            className={`admin-tab-btn ${adminTab === 'unit_segregation' ? 'active' : ''}`}
+            onClick={() => setAdminTab('unit_segregation')}
+          >
+            🏛️ Page 2: Unit-Wise Segregation (8 Official Units)
+            <span className="admin-tab-counter">{ORGANIZATIONAL_UNITS.length} Units</span>
+          </button>
+
+          <button
+            className={`admin-tab-btn ${adminTab === 'user_directory' ? 'active' : ''}`}
+            onClick={() => setAdminTab('user_directory')}
+          >
+            👥 Auditor Directory & Staff Roster
+            <span className="admin-tab-counter">{usersDb.length}</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* ── Main Workspace Body ── */}
+      <main className="admin-body-container">
+        {/* ════════════════════════════════════════════════════════════════ */}
+        {/* ── PAGE 1: ALL USER ACTIVITY (2x2 KPI GRID & PIE CHART) ───────── */}
+        {/* ════════════════════════════════════════════════════════════════ */}
+        {adminTab === 'master_10' && (
+          <div>
+            {/* ROW 1: 2x2 KPI METRICS GRID */}
+            <div className="admin-kpi-grid">
+              <div className="admin-kpi-card">
+                <div className="admin-kpi-info">
+                  <span className="admin-kpi-label">Active Auditors Roster</span>
+                  <span className="admin-kpi-val">{usersDb.length} Staff</span>
+                  <span className="admin-kpi-subtext">Across 8 Enterprise Units</span>
+                </div>
+                <div className="admin-kpi-icon-box" style={{ background: '#EFF6FF', color: '#2563EB' }}>👥</div>
+              </div>
+
+              <div className="admin-kpi-card">
+                <div className="admin-kpi-info">
+                  <span className="admin-kpi-label">Total Shift Duty Sheets</span>
+                  <span className="admin-kpi-val">{all11Records.length} Sheets</span>
+                  <span className="admin-kpi-subtext">Captured with 11 Duty Parameters</span>
+                </div>
+                <div className="admin-kpi-icon-box" style={{ background: '#ECFDF5', color: '#059669' }}>📋</div>
+              </div>
+
+              <div className="admin-kpi-card">
+                <div className="admin-kpi-info">
+                  <span className="admin-kpi-label">8 Official TTD Units Coverage</span>
+                  <span className="admin-kpi-val">{ORGANIZATIONAL_UNITS.length} Units</span>
+                  <span className="admin-kpi-subtext">100% Segregated Data Stream</span>
+                </div>
+                <div className="admin-kpi-icon-box" style={{ background: '#FEF3C7', color: '#D97706' }}>🏛️</div>
+              </div>
+
+              <div className="admin-kpi-card">
+                <div className="admin-kpi-info">
+                  <span className="admin-kpi-label">CA Remarks & Escalations</span>
+                  <span className="admin-kpi-val">
+                    {all11Records.filter(r => r.field9_caRemarks && r.field9_caRemarks.length > 5).length} Items
+                  </span>
+                  <span className="admin-kpi-subtext" style={{ color: '#DC2626' }}>Requiring Management Attention</span>
+                </div>
+                <div className="admin-kpi-icon-box" style={{ background: '#FEF2F2', color: '#DC2626' }}>⚠️</div>
+              </div>
             </div>
 
-            {/* Sub-tab 1: Basic Info (Matching Image 3) */}
-            {momActiveSubTab === 'basic' && (
-              <div>
-                <div className="mom-form-row-2">
-                  <div className="mom-field-group">
-                    <label>Meeting Title</label>
-                    <input 
-                      type="text"
-                      className="mom-field-input"
-                      value={momMeetingTitle}
-                      onChange={(e) => setMomMeetingTitle(e.target.value)}
-                      placeholder="e.g., Weekly Team Meeting"
-                    />
-                  </div>
-
-                  <div className="mom-field-group">
-                    <label>Meeting Type</label>
-                    <select 
-                      className="mom-field-select"
-                      value={momMeetingType}
-                      onChange={(e) => setMomMeetingType(e.target.value)}
-                    >
-                      <option value="Team Meeting">Team Meeting</option>
-                      <option value="Client Meeting">Client Meeting</option>
-                      <option value="Audit Review">Audit Review</option>
-                      <option value="Management Meeting">Management Meeting</option>
-                      <option value="Statutory Review">Statutory Review</option>
-                      <option value="Field Inspection">Field Inspection</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="mom-form-row-2">
-                  <div className="mom-field-group">
-                    <label>Date</label>
-                    <input 
-                      type="text"
-                      className="mom-field-input"
-                      value={momDate}
-                      onChange={(e) => setMomDate(e.target.value)}
-                      placeholder="12/08/2026"
-                    />
-                  </div>
-
-                  <div className="mom-field-group">
-                    <label>Time</label>
-                    <input 
-                      type="text"
-                      className="mom-field-input"
-                      value={momTime}
-                      onChange={(e) => setMomTime(e.target.value)}
-                      placeholder="--:-- --"
-                    />
-                  </div>
-                </div>
-
-                <div className="mom-form-row-2">
-                  <div className="mom-field-group">
-                    <label>Organizer</label>
-                    <input 
-                      type="text"
-                      className="mom-field-input"
-                      value={momOrganizer}
-                      onChange={(e) => setMomOrganizer(e.target.value)}
-                      placeholder="Demo Managing Partner"
-                    />
-                  </div>
-
-                  <div className="mom-field-group">
-                    <label>Location</label>
-                    <input 
-                      type="text"
-                      className="mom-field-input"
-                      value={momLocation}
-                      onChange={(e) => setMomLocation(e.target.value)}
-                      placeholder="e.g., Conference Room A, Zoo..."
-                    />
-                  </div>
-                </div>
-
-                <div className="mom-field-group">
-                  <label>Attendees</label>
-                  <textarea 
-                    className="mom-field-textarea"
-                    rows="3"
-                    value={momAttendees}
-                    onChange={(e) => setMomAttendees(e.target.value)}
-                    placeholder="List attendees (comma separated or one per line)"
-                  />
-                </div>
-
-                <div className="mom-dialog-actions">
-                  <button type="button" className="btn-mom-cancel" onClick={() => setShowMomDialog(false)}>
-                    Cancel
-                  </button>
-                  <button type="button" className="btn-mom-save" onClick={() => setMomActiveSubTab('content')}>
-                    Next: Content →
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Sub-tab 2: Content (Matching Image 2) */}
-            {momActiveSubTab === 'content' && (
-              <div>
-                <div className="mom-field-group">
-                  <label>Meeting Agenda</label>
-                  <textarea 
-                    className="mom-field-textarea"
-                    rows="3"
-                    value={momAgenda}
-                    onChange={(e) => setMomAgenda(e.target.value)}
-                    placeholder="List the main topics discussed..."
-                  />
-                  <span style={{ fontSize: '0.7rem', color: '#64748B', fontStyle: 'italic', marginTop: 2 }}>
-                    Tip: Use bullet points or numbers for better organization
+            {/* ROW 2: 2-TO-1 SPLIT SUMMARY ANALYTICS GRID WITH PIE CHART */}
+            <div className="admin-analytics-grid">
+              {/* Left 2-Span Box: Unit-Wise Distribution Pie Chart */}
+              <div className="analytics-card-box">
+                <div className="analytics-card-header">
+                  <h4 className="analytics-card-title">
+                    <span>📊</span>
+                    Unit-Wise Audit Activity Distribution (Summary Analytics)
+                  </h4>
+                  <span style={{ fontSize: '0.75rem', background: '#F1F5F9', color: '#475569', fontWeight: '700', padding: '0.2rem 0.6rem', borderRadius: '6px' }}>
+                    Live Unit Metrics
                   </span>
                 </div>
 
-                <div className="mom-field-group" style={{ marginTop: '0.85rem' }}>
-                  <label>Key Discussions & Decisions</label>
-                  <textarea 
-                    className="mom-field-textarea"
-                    rows="4"
-                    value={momDiscussions}
-                    onChange={(e) => setMomDiscussions(e.target.value)}
-                    placeholder="Summarize important discussions, decisions made, and key points..."
-                  />
-                </div>
-
-                <div className="mom-dialog-actions">
-                  <button type="button" className="btn-mom-cancel" onClick={() => setMomActiveSubTab('basic')}>
-                    ← Back
-                  </button>
-                  <button type="button" className="btn-mom-save" onClick={() => setMomActiveSubTab('actions')}>
-                    Next: Actions →
-                  </button>
-                </div>
+                <UnitDistributionPieChart allRecords={all11Records} />
               </div>
-            )}
 
-            {/* Sub-tab 3: Actions (Matching Image 1) */}
-            {momActiveSubTab === 'actions' && (
-              <div>
-                <div className="mom-field-group">
-                  <label>Action Items</label>
-                  <textarea 
-                    className="mom-field-textarea"
-                    rows="4"
-                    value={momActionItems}
-                    onChange={(e) => setMomActionItems(e.target.value)}
-                    placeholder={`List action items with responsible persons and deadlines...\nExample:\n• [Person Name] - Task description - Due: DD/MM/YYYY\n• [Person Name] - Another task - Due: DD/MM/YYYY`}
-                  />
+              {/* Right 1-Span Box: Shift Status & Progress Analytics */}
+              <div className="analytics-card-box">
+                <div className="analytics-card-header">
+                  <h4 className="analytics-card-title">
+                    <span>📈</span>
+                    Shift Completion Analytics
+                  </h4>
+                  <span style={{ fontSize: '0.75rem', background: '#ECFDF5', color: '#047857', fontWeight: '800', padding: '0.2rem 0.6rem', borderRadius: '6px' }}>
+                    {completedPercent}% Overall
+                  </span>
                 </div>
 
-                <div className="mom-field-group">
-                  <label>Next Meeting</label>
-                  <input 
-                    type="text"
-                    className="mom-field-input"
-                    value={momNextMeeting}
-                    onChange={(e) => setMomNextMeeting(e.target.value)}
-                    placeholder="Date and time of next meeting (if applicable)"
-                  />
-                </div>
-
-                {/* Live Preview Box from Image 1 */}
-                <div className="mom-preview-box">
-                  <div className="mom-preview-header">
-                    <span>📄 Preview</span>
+                {/* Status items 2 at a time in one row */}
+                <div className="status-grid-2col">
+                  <div className="status-card-compact" style={{ borderLeft: '4px solid #059669' }}>
+                    <div className="status-card-header-row">
+                      <span className="status-card-title" style={{ color: '#047857' }}>✅ Shift Handovers</span>
+                      <span className="status-card-badge" style={{ background: '#ECFDF5', color: '#047857' }}>{completedPercent}%</span>
+                    </div>
+                    <div className="status-card-val">{completedCount} Completed</div>
+                    <div className="status-progress-track">
+                      <div className="status-progress-fill" style={{ width: `${completedPercent}%`, background: '#059669' }} />
+                    </div>
                   </div>
-                  <div>
-                    <span className="mom-preview-tag">{momMeetingType.toLowerCase().replace(' ', '')}</span>
-                    <div className="mom-preview-meta">
-                      <span>📅 {momDate || '2026-08-12'}</span>
-                      <span>👤 Organized by: {momOrganizer || currentUser?.name || 'Demo Managing Partner'}</span>
+
+                  <div className="status-card-compact" style={{ borderLeft: '4px solid #F59E0B' }}>
+                    <div className="status-card-header-row">
+                      <span className="status-card-title" style={{ color: '#D97706' }}>⏱️ In Progress</span>
+                      <span className="status-card-badge" style={{ background: '#FEF3C7', color: '#D97706' }}>{100 - completedPercent}%</span>
+                    </div>
+                    <div className="status-card-val">{inProgressCount} Active</div>
+                    <div className="status-progress-track">
+                      <div className="status-progress-fill" style={{ width: `${100 - completedPercent}%`, background: '#F59E0B' }} />
+                    </div>
+                  </div>
+
+                  <div className="status-card-compact" style={{ borderLeft: '4px solid #EF4444' }}>
+                    <div className="status-card-header-row">
+                      <span className="status-card-title" style={{ color: '#DC2626' }}>⚠️ CA Escalations</span>
+                      <span className="status-card-badge" style={{ background: '#FEF2F2', color: '#DC2626' }}>Alert</span>
+                    </div>
+                    <div className="status-card-val">
+                      {all11Records.filter(r => r.field9_caRemarks && r.field9_caRemarks.length > 5).length} Items
+                    </div>
+                    <div className="status-progress-track">
+                      <div className="status-progress-fill" style={{ width: `${Math.round((all11Records.filter(r => r.field9_caRemarks && r.field9_caRemarks.length > 5).length / (all11Records.length || 1)) * 100)}%`, background: '#EF4444' }} />
+                    </div>
+                  </div>
+
+                  <div className="status-card-compact" style={{ borderLeft: '4px solid #2563EB', background: '#F8FAFC' }}>
+                    <div className="status-card-header-row">
+                      <span className="status-card-title" style={{ color: '#2563EB' }}>🏛️ 8 Official TDD Units</span>
+                      <span className="status-card-badge" style={{ background: '#EFF6FF', color: '#2563EB' }}>Active</span>
+                    </div>
+                    <div className="status-card-val">{all11Records.length} Active Logs</div>
+                    <div style={{ fontSize: '0.7rem', color: '#64748B', marginTop: '0.2rem', fontWeight: '600' }}>
+                      Real-time roster & duty monitoring
                     </div>
                   </div>
                 </div>
-
-                {momSuccessToast && (
-                  <div style={{ background: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0', padding: '0.5rem 0.75rem', borderRadius: '10px', fontSize: '0.75rem', fontWeight: '800', marginBottom: '1rem', textAlign: 'center' }}>
-                    ✅ Minutes of Meeting Saved Successfully!
-                  </div>
-                )}
-
-                <div className="mom-dialog-actions">
-                  <button type="button" className="btn-mom-cancel" onClick={() => setShowMomDialog(false)}>
-                    Cancel
-                  </button>
-                  <button type="button" className="btn-mom-save" onClick={handleSaveMom}>
-                    💾 Save MOM
-                  </button>
-                </div>
               </div>
-            )}
-
-          </div>
-        </div>
-      )}
-
-      {/* ── Create New Task Modal (Matching Image 4) ── */}
-      {showTaskDialog && (
-        <div className="mom-dialog-backdrop" onClick={() => setShowTaskDialog(false)}>
-          <div className="task-dialog-card" onClick={(e) => e.stopPropagation()}>
-            
-            {/* Header */}
-            <div className="task-dialog-header">
-              <div>
-                <h3>
-                  <span>➕</span>
-                  <span>Create New Task</span>
-                </h3>
-                <p>Create a new task for yourself or assign to team members</p>
-              </div>
-              <button 
-                type="button" 
-                onClick={() => setShowTaskDialog(false)}
-                style={{ background: '#F1F5F9', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', color: '#64748B' }}
-              >
-                ✕
-              </button>
             </div>
 
-            <form onSubmit={handleCreateTask}>
-              <div className="mom-form-row-2">
-                <div className="mom-field-group">
-                  <label>Task Title</label>
-                  <input 
-                    type="text"
-                    className="mom-field-input"
-                    value={newTaskTitle}
-                    onChange={(e) => setNewTaskTitle(e.target.value)}
-                    placeholder="Enter task title"
-                    required
-                  />
+            {/* ROW 3: STREAMLINED MINIMAL MASTER EXECUTIVE DUTY LOG TABLE WITH TOP-RIGHT DOWNLOAD BUTTON */}
+            <div className="master-card-box">
+              <div className="master-card-header master-header-split">
+                <div className="master-card-title-group">
+                  <span style={{ fontSize: '1.3rem' }}>📑</span>
+                  <div>
+                    <h3 className="master-card-title">Master Executive Auditor Duty Log Summary</h3>
+                    <p style={{ fontSize: '0.78rem', color: '#64748B', margin: 0 }}>
+                      Toggle between Super Admin logs and User Auditor logs. Download CSV directly from this table.
+                    </p>
+                  </div>
                 </div>
 
-                <div className="mom-field-group">
-                  <label>Priority</label>
-                  <select 
-                    className="mom-field-select"
-                    value={newTaskPriority}
-                    onChange={(e) => setNewTaskPriority(e.target.value)}
+                {/* Right-Side Corner Download CSV Button */}
+                <button
+                  className="btn-export-csv btn-export-right-corner"
+                  onClick={() => exportRecordsToCsv(filteredPage1Records, 'Master_Auditor_Duty_Log_Summary')}
+                  title="Download Current Master Table Records as CSV"
+                >
+                  📥 Download CSV
+                </button>
+              </div>
+
+              {/* Toolbar with Separate Buttons & Filter Selects */}
+              <div className="master-toolbar-bar">
+                {/* User Auditor Duty Log Filter */}
+                <div className="separate-role-btn-group">
+                  <button
+                    className={`btn-separate-role ${roleFilter === 'ALL' ? 'active' : ''}`}
+                    onClick={() => setRoleFilter('ALL')}
                   >
-                    <option value="Low Priority">Low Priority</option>
-                    <option value="Medium Priority">Medium Priority</option>
-                    <option value="High Priority">High Priority</option>
-                    <option value="Urgent">Urgent</option>
-                  </select>
+                    👤 All User Auditor Duty Logs ({all11Records.length})
+                  </button>
                 </div>
-              </div>
 
-              <div className="mom-field-group">
-                <label>Description</label>
-                <textarea 
-                  className="mom-field-textarea"
-                  rows="3"
-                  value={newTaskDescription}
-                  onChange={(e) => setNewTaskDescription(e.target.value)}
-                  placeholder="Describe the task in detail..."
-                />
-              </div>
-
-              <div className="mom-form-row-2">
-                <div className="mom-field-group">
-                  <label>Assigned To</label>
-                  <select 
-                    className="mom-field-select"
-                    value={newTaskAssignedTo}
-                    onChange={(e) => setNewTaskAssignedTo(e.target.value)}
+                {/* Select Filters */}
+                <div className="master-filter-selects">
+                  <select
+                    className="master-select-filter"
+                    value={filterUnit}
+                    onChange={e => setFilterUnit(e.target.value)}
                   >
-                    <option value={currentUser?.name || 'Demo Managing Partner'}>
-                      {currentUser?.name || 'Demo Managing Partner'} (Self)
-                    </option>
-                    {usersDb.map(u => (
-                      <option key={u.id} value={u.name}>{u.name} ({u.roleTitle || u.role})</option>
+                    <option value="ALL">🏢 Unit: All 8 Units</option>
+                    {ORGANIZATIONAL_UNITS.map((u, i) => (
+                      <option key={i} value={u}>{u}</option>
                     ))}
                   </select>
-                </div>
 
-                <div className="mom-field-group">
-                  <label>Due Date</label>
-                  <input 
-                    type="text"
-                    className="mom-field-input"
-                    value={newTaskDueDate}
-                    onChange={(e) => setNewTaskDueDate(e.target.value)}
-                    placeholder="dd/mm/yyyy"
-                  />
-                </div>
-              </div>
-
-              <div className="mom-form-row-2">
-                <div className="mom-field-group">
-                  <label>Project</label>
-                  <input 
-                    type="text"
-                    className="mom-field-input"
-                    value={newTaskProject}
-                    onChange={(e) => setNewTaskProject(e.target.value)}
-                    placeholder="Related project (optional)"
-                  />
-                </div>
-
-                <div className="mom-field-group">
-                  <label>Category</label>
-                  <select 
-                    className="mom-field-select"
-                    value={newTaskCategory}
-                    onChange={(e) => setNewTaskCategory(e.target.value)}
+                  <select
+                    className="master-select-filter"
+                    value={filterStatus}
+                    onChange={e => setFilterStatus(e.target.value)}
                   >
-                    <option value="General">General</option>
-                    <option value="Audit Verification">Audit Verification</option>
-                    <option value="Compliance Check">Compliance Check</option>
-                    <option value="Voucher Verification">Voucher Verification</option>
-                    <option value="Stock Ledger Audit">Stock Ledger Audit</option>
-                    <option value="Tender Review">Tender Review</option>
+                    <option value="ALL">🎯 Status: All</option>
+                    <option value="COMPLETED">✅ Completed</option>
+                    <option value="IN_PROGRESS">⏱️ In Progress</option>
                   </select>
                 </div>
               </div>
 
-              {taskSuccessToast && (
-                <div style={{ background: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0', padding: '0.5rem 0.75rem', borderRadius: '10px', fontSize: '0.75rem', fontWeight: '800', marginBottom: '1rem', textAlign: 'center' }}>
-                  ✅ Task Created Successfully!
+              {/* Streamlined Minimal 5-Column Table View */}
+              <div className="master-table-wrapper">
+                <table className="master-10-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '60px' }}>#</th>
+                      <th style={{ width: '230px' }}>Auditor Details & Login Time</th>
+                      <th style={{ width: '260px' }}>Unit(s) Working Out Of</th>
+                      <th>Which Unit & Sub-Unit is Doing It</th>
+                      <th style={{ width: '130px', textAlign: 'center' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedPage1Records.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" style={{ textAlign: 'center', padding: '3rem 1rem', color: '#94A3B8' }}>
+                          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🔍</div>
+                          No matching auditor activity records found for current role filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedPage1Records.map((rec, idx) => {
+                        const globalIndex = (currentPage1 - 1) * ITEMS_PER_PAGE + idx + 1;
+                        // Split assigned units if multiple
+                        const assignedUnitsList = rec.field4_unitDetails.split(',').map(u => u.trim());
+
+                        return (
+                          <tr key={rec.id || idx}>
+                            <td>
+                              <span className="field-pill-number">{globalIndex}</span>
+                              <div style={{ fontSize: '0.68rem', color: '#64748B', marginTop: '0.2rem' }}>{rec.rawDate}</div>
+                            </td>
+
+                            {/* Column 2: Full Name, Reg No, and Login Time Underneath */}
+                            <td>
+                              <div className="auditor-profile-cell">
+                                <span className="auditor-name-txt" style={{ fontSize: '0.92rem', fontWeight: '800', color: '#0F172A' }}>{rec.field2_fullName}</span>
+                                <span className="auditor-reg-txt" style={{ fontSize: '0.76rem', color: '#2563EB', fontWeight: '700' }}>🎓 {rec.field3_studentRegNo}</span>
+                                <div style={{ marginTop: '0.35rem' }}>
+                                  <span style={{ fontSize: '0.75rem', fontWeight: '800', color: '#1E40AF', background: '#EFF6FF', padding: '0.25rem 0.6rem', borderRadius: '6px', border: '1px solid #BFDBFE', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    ⏱️ Login: {rec.field1_loginTime}
+                                  </span>
+                                </div>
+                                {rec.loginLocation && (
+                                  <a
+                                    href={`https://maps.google.com/?q=${rec.loginLocation.latitude},${rec.loginLocation.longitude}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: '#047857', fontWeight: '800', textDecoration: 'none', display: 'inline-block' }}
+                                  >
+                                    📍 GPS: {Number(rec.loginLocation.latitude).toFixed(5)}, {Number(rec.loginLocation.longitude).toFixed(5)}
+                                    {rec.loginLocation.accuracyMeters != null ? ` (±${Math.round(Number(rec.loginLocation.accuracyMeters))} m)` : ''}
+                                  </a>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* Column 3: Unit(s) Working Out Of */}
+                            <td>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                                {assignedUnitsList.map((unitName, uIdx) => (
+                                  <span key={uIdx} className="unit-tag-badge" title={unitName} style={{ fontSize: '0.78rem', fontWeight: '800', background: '#F8FAFC', border: '1px solid #CBD5E1', color: '#0F172A', padding: '0.25rem 0.6rem', borderRadius: '8px' }}>
+                                    🏛️ {unitName}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+
+                            {/* Column 4: Which Unit & Sub-Unit is Doing It Today */}
+                            <td>
+                              <div>
+                                <div style={{ fontSize: '0.84rem', fontWeight: '800', color: '#1E293B', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                  <span style={{ background: '#2563EB', color: '#FFFFFF', fontSize: '0.65rem', fontWeight: '800', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>ACTIVE</span>
+                                  <span>{rec.field4_unitDetails}</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
+                                  <span style={{ fontSize: '0.76rem', color: '#475569', fontWeight: '700', background: '#F1F5F9', padding: '0.2rem 0.5rem', borderRadius: '6px' }}>
+                                    📍 Sub-Unit: {rec.field5_subUnitDetails}
+                                  </span>
+                                  <span style={{ fontSize: '0.72rem', background: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0', padding: '0.15rem 0.55rem', borderRadius: '6px', fontWeight: '800' }}>
+                                    📋 {rec.field6_auditWorkType}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Column 5: Action Button */}
+                            <td style={{ textAlign: 'center' }}>
+                              <button
+                                className="btn-inspect-10"
+                                onClick={() => setInspecting11FieldRecord(rec)}
+                                style={{ background: '#2563EB', color: '#FFFFFF', border: 'none', padding: '0.5rem 0.95rem', borderRadius: '10px', fontSize: '0.82rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.25)' }}
+                              >
+                                🔍 View Details
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Page 1 Pagination Footer Bar with Total Summary Count */}
+              <div className="admin-pagination-bar">
+                <div className="pagination-info-text">
+                  Showing <strong>{filteredPage1Records.length > 0 ? (currentPage1 - 1) * ITEMS_PER_PAGE + 1 : 0}</strong> to <strong>{Math.min(currentPage1 * ITEMS_PER_PAGE, filteredPage1Records.length)}</strong> of <strong>{filteredPage1Records.length} Total Active Auditor Duty Log Entries</strong> across all 8 TTD Units
+                </div>
+
+                <div className="pagination-btns-group">
+                  <button
+                    className="page-nav-btn"
+                    disabled={currentPage1 === 1}
+                    onClick={() => setCurrentPage1(prev => Math.max(prev - 1, 1))}
+                  >
+                    ◀ Previous Page
+                  </button>
+
+                  {Array.from({ length: totalPage1Pages }, (_, i) => i + 1).map(p => (
+                    <button
+                      key={p}
+                      className={`page-number-btn ${currentPage1 === p ? 'active' : ''}`}
+                      onClick={() => setCurrentPage1(p)}
+                    >
+                      {p}
+                    </button>
+                  ))}
+
+                  <button
+                    className="page-nav-btn"
+                    disabled={currentPage1 === totalPage1Pages}
+                    onClick={() => setCurrentPage1(prev => Math.min(prev + 1, totalPage1Pages))}
+                  >
+                    Next Page ▶
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════════════════ */}
+        {/* ── PAGE 2: UNIT-WISE SEGREGATION (STREAMLINED 5-COLUMN TABLE) ─── */}
+        {/* ════════════════════════════════════════════════════════════════ */}
+        {adminTab === 'unit_segregation' && (
+          <div>
+            {/* 8-UNIT TOP SEGREGATION BANNER & TABS */}
+            <div className="unit-segregation-banner">
+              <div className="unit-banner-header">
+                <div>
+                  <h3 className="unit-banner-title">
+                    <span>🏛️</span>
+                    TTD Audit Unit Details attending today (8 Enterprise Units)
+                  </h3>
+                  <p className="unit-banner-desc">
+                    Choose any of the 8 official units below to filter all auditor shift data, active rosters, and duty reports unit-by-unit.
+                  </p>
+                </div>
+
+                <button
+                  className="btn-export-csv"
+                  onClick={() => exportRecordsToCsv(page2UnitRecords, `Unit_Audit_Report_${selectedUnitTab.slice(0, 15)}`)}
+                >
+                  📥 Export {selectedUnitTab.slice(0, 15)}... CSV
+                </button>
+              </div>
+
+              {/* Grid of the 8 Official Unit Card Buttons */}
+              <div className="unit-grid-8">
+                {ORGANIZATIONAL_UNITS.map((unitName, idx) => {
+                  const unitLogs = all11Records.filter(r => r.field4_unitDetails === unitName);
+                  const unitAuditorsCount = usersDb.filter(u => u.unit === unitName || unitName.includes(u.unit)).length;
+                  const isActive = selectedUnitTab === unitName;
+
+                  return (
+                    <button
+                      key={idx}
+                      className={`unit-card-btn ${isActive ? 'active' : ''}`}
+                      onClick={() => setSelectedUnitTab(unitName)}
+                    >
+                      <div className="unit-card-name">
+                        <span style={{ marginRight: '0.3rem' }}>{idx + 1}.</span>
+                        {unitName}
+                      </div>
+                      <div className="unit-card-meta">
+                        <span>👥 {unitAuditorsCount} Auditors</span>
+                        <span className="unit-card-badge">📋 {unitLogs.length} Logs</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* SEGREGATED UNIT DATA VIEW */}
+            <div className="master-card-box">
+              <div className="master-card-header" style={{ background: '#EFF6FF', borderBottom: '2px solid #2563EB' }}>
+                <div>
+                  <span style={{ fontSize: '0.72rem', fontWeight: '800', color: '#2563EB', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    CURRENTLY VIEWING SEGREGATED UNIT DATA:
+                  </span>
+                  <h3 style={{ fontSize: '1.25rem', fontWeight: '800', color: '#1E3A8A', margin: '0.2rem 0 0' }}>
+                    🏛️ {selectedUnitTab}
+                  </h3>
+                </div>
+
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                  <div style={{ background: '#FFFFFF', padding: '0.5rem 1rem', borderRadius: '10px', border: '1px solid #BFDBFE', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: '700' }}>ASSIGNED AUDITORS</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: '800', color: '#1D4ED8' }}>{page2UnitAuditors.length} Staff</div>
+                  </div>
+
+                  <div style={{ background: '#FFFFFF', padding: '0.5rem 1rem', borderRadius: '10px', border: '1px solid #BFDBFE', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: '700' }}>TOTAL DUTY LOGS</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: '800', color: '#059669' }}>
+                      {page2UnitRecords.length} Sheets
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sub-Section 1: Unit Staff Roster */}
+              <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #E2E8F0', background: '#FFFFFF' }}>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: '800', color: '#0F172A', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  👥 Assigned Auditors & Staff in {selectedUnitTab}
+                </h4>
+
+                {page2UnitAuditors.length === 0 ? (
+                  <p style={{ fontSize: '0.85rem', color: '#64748B', italic: 'true', margin: 0 }}>
+                    No static users directly assigned to this unit in directory (shift entries below record all active field staff).
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    {page2UnitAuditors.map((u, i) => (
+                      <div key={i} style={{ background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: '12px', padding: '0.65rem 0.85rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                        <div style={{ width: '32px', height: '32px', background: '#3B82F6', color: '#FFF', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '0.85rem' }}>
+                          {u.name.charAt(0)}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: '800', color: '#0F172A' }}>{u.name}</div>
+                          <div style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: '600' }}>{u.roleTitle || 'Auditor'} • {u.studentRegNo || u.email}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Sub-Section 2: Streamlined Minimal 5-Column Table View */}
+              <div className="master-table-wrapper">
+                <table className="master-10-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '70px' }}>#</th>
+                      <th style={{ width: '150px' }}>Login Time</th>
+                      <th style={{ width: '220px' }}>Full Name & Reg No</th>
+                      <th>Which Unit is Doing It</th>
+                      <th style={{ width: '140px', textAlign: 'center' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedPage2Records.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" style={{ textAlign: 'center', padding: '3rem 1rem', color: '#94A3B8' }}>
+                          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🏛️</div>
+                          No duty shift logs or audit reports recorded yet for <strong>{selectedUnitTab}</strong>.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedPage2Records.map((rec, idx) => {
+                        const globalIndex = (currentPage2 - 1) * ITEMS_PER_PAGE + idx + 1;
+                        return (
+                          <tr key={rec.id || idx}>
+                            <td><span className="field-pill-number">{globalIndex}</span></td>
+                            <td>
+                              <span style={{ fontSize: '0.85rem', fontWeight: '800', color: '#2563EB', background: '#EFF6FF', padding: '0.3rem 0.7rem', borderRadius: '8px' }}>
+                                ⏱️ {rec.field1_loginTime}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="auditor-profile-cell">
+                                <span className="auditor-name-txt" style={{ fontSize: '0.92rem' }}>{rec.field2_fullName}</span>
+                                <span className="auditor-reg-txt">🎓 {rec.field3_studentRegNo}</span>
+                              </div>
+                            </td>
+                            <td>
+                              <div>
+                                <span className="unit-tag-badge" title={rec.field4_unitDetails} style={{ maxWidth: '320px', fontSize: '0.8rem' }}>
+                                  🏛️ {rec.field4_unitDetails}
+                                </span>
+                                <div style={{ fontSize: '0.74rem', color: '#64748B', marginTop: '0.25rem' }}>📍 {rec.field5_subUnitDetails}</div>
+                              </div>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <button
+                                className="btn-inspect-10"
+                                onClick={() => setInspecting11FieldRecord(rec)}
+                                style={{ background: '#2563EB', color: '#FFFFFF', border: 'none', padding: '0.5rem 0.95rem', borderRadius: '10px', fontSize: '0.82rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.25)' }}
+                              >
+                                🔍 View Details
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Page 2 Pagination Footer Bar */}
+              <div className="admin-pagination-bar">
+                <div className="pagination-info-text">
+                  Showing <strong>{page2UnitRecords.length > 0 ? (currentPage2 - 1) * ITEMS_PER_PAGE + 1 : 0}</strong> to <strong>{Math.min(currentPage2 * ITEMS_PER_PAGE, page2UnitRecords.length)}</strong> of <strong>{page2UnitRecords.length} Total Unit Duty Logs</strong> for {selectedUnitTab}
+                </div>
+
+                <div className="pagination-btns-group">
+                  <button
+                    className="page-nav-btn"
+                    disabled={currentPage2 === 1}
+                    onClick={() => setCurrentPage2(prev => Math.max(prev - 1, 1))}
+                  >
+                    ◀ Previous Page
+                  </button>
+
+                  {Array.from({ length: totalPage2Pages }, (_, i) => i + 1).map(p => (
+                    <button
+                      key={p}
+                      className={`page-number-btn ${currentPage2 === p ? 'active' : ''}`}
+                      onClick={() => setCurrentPage2(p)}
+                    >
+                      {p}
+                    </button>
+                  ))}
+
+                  <button
+                    className="page-nav-btn"
+                    disabled={currentPage2 === totalPage2Pages}
+                    onClick={() => setCurrentPage2(prev => Math.min(prev + 1, totalPage2Pages))}
+                  >
+                    Next Page ▶
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════════════════ */}
+        {/* ── PAGE 3: AUDITOR DIRECTORY & STAFF ROSTER ─────────────────── */}
+        {/* ════════════════════════════════════════════════════════════════ */}
+        {adminTab === 'user_directory' && (
+          <div>
+            <div className="master-card-box">
+              <div className="master-card-header">
+                <div>
+                  <h3 className="master-card-title">👥 Enterprise Auditor Directory ({usersDb.length} Registered Staff)</h3>
+                  <p style={{ fontSize: '0.78rem', color: '#64748B', margin: 0 }}>
+                    Manage auditor profiles, assign roles, update 8-unit allocations, and provision accounts.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setShowCreateUserModal(true)}
+                  style={{ background: '#2563EB', color: '#FFFFFF', border: 'none', padding: '0.6rem 1.15rem', borderRadius: '10px', fontSize: '0.85rem', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  ➕ Add New Auditor Account
+                </button>
+              </div>
+
+              <div className="master-table-wrapper">
+                <table className="master-10-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Auditor Name</th>
+                      <th>Email / Reg No</th>
+                      <th>Designation / Role Title</th>
+                      <th>Assigned TTD Unit</th>
+                      <th>Joined Date</th>
+                      <th>Access Level</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usersDb.map((u, i) => (
+                      <tr key={u.id || i}>
+                        <td><span className="field-pill-number">{i + 1}</span></td>
+                        <td>
+                          <div style={{ fontWeight: '800', color: '#0F172A' }}>{u.name}</div>
+                          <div style={{ fontSize: '0.72rem', color: '#64748B' }}>ID: {u.id}</div>
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: '700', color: '#334155' }}>{u.email}</div>
+                          <div style={{ fontSize: '0.72rem', color: '#2563EB', fontWeight: '700' }}>🎓 {u.studentRegNo || 'FCA-OFFICIAL'}</div>
+                        </td>
+                        <td>
+                          <span style={{ background: '#F1F5F9', border: '1px solid #CBD5E1', padding: '0.2rem 0.6rem', borderRadius: '8px', fontSize: '0.78rem', fontWeight: '700' }}>
+                            {u.roleTitle || u.role}
+                          </span>
+                        </td>
+                        <td style={{ maxWidth: '220px' }}>
+                          <span className="unit-tag-badge" title={u.unit}>🏛️ {u.unit || 'All Units'}</span>
+                        </td>
+                        <td>{u.joinedDate || '01-Jan-2026'}</td>
+                        <td>
+                          <span className={`status-badge-pill ${u.role === 'SUPER_ADMIN' ? 'completed' : 'in-progress'}`}>
+                            {u.role}
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '0.4rem' }}>
+                            <button
+                              onClick={() => setEditingUserRole(u)}
+                              style={{ background: '#F1F5F9', border: '1px solid #CBD5E1', color: '#0F172A', padding: '0.35rem 0.65rem', borderRadius: '8px', fontSize: '0.75rem', fontWeight: '700', cursor: 'pointer' }}
+                            >
+                              ✏️ Edit Role & Unit
+                            </button>
+                            {u.role !== 'SUPER_ADMIN' && u.email !== 'admin' && (
+                              <button
+                                onClick={() => handleDeleteUser(u)}
+                                style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', color: '#DC2626', padding: '0.35rem 0.65rem', borderRadius: '8px', fontSize: '0.75rem', fontWeight: '700', cursor: 'pointer' }}
+                                title="Remove this auditor account from system"
+                              >
+                                🗑️ Remove
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* ════════════════════════════════════════════════════════════════ */}
+      {/* ── MODAL: COMPLETE 11-FIELD & 3-MONTH SHIFT HISTORY DRAWER ───── */}
+      {/* ════════════════════════════════════════════════════════════════ */}
+      {inspecting11FieldRecord && (
+        <div className="modal-admin-overlay" onClick={() => setInspecting11FieldRecord(null)}>
+          <div className="modal-admin-card" style={{ maxWidth: '850px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-admin-header">
+              <div className="modal-admin-title">
+                <span>📑</span>
+                Complete Auditor Duty Form & 3-Month Shift History Ledger
+              </div>
+              <button className="modal-close-btn" onClick={() => setInspecting11FieldRecord(null)}>✕</button>
+            </div>
+
+            <div className="modal-admin-body" style={{ maxHeight: '82vh', overflowY: 'auto' }}>
+              {/* Profile Card Banner */}
+              <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', padding: '0.85rem 1.25rem', borderRadius: '14px', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: '0.72rem', color: '#1E40AF', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    CURRENT SHIFT AUDITOR RECORD
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: '900', color: '#1E3A8A', marginTop: '0.1rem' }}>
+                    {inspecting11FieldRecord.field2_fullName}
+                  </div>
+                  <div style={{ fontSize: '0.82rem', color: '#2563EB', fontWeight: '700' }}>
+                    Student Reg No: {inspecting11FieldRecord.field3_studentRegNo}
+                  </div>
+                </div>
+
+                <div style={{ textAlign: 'right' }}>
+                  <span className="work-type-chip">📋 {inspecting11FieldRecord.field6_auditWorkType}</span>
+                  <div style={{ fontSize: '0.78rem', color: '#64748B', fontWeight: '700', marginTop: '0.35rem' }}>
+                    Date: {inspecting11FieldRecord.rawDate}
+                  </div>
+                </div>
+              </div>
+
+              {/* Grid of All 11 Fields in Exact Requested Order */}
+              <h4 style={{ fontSize: '0.9rem', fontWeight: '800', color: '#0F172A', marginBottom: '0.75rem' }}>
+                📋 Shift Form 11 Duty Parameters
+              </h4>
+              <div className="field-10-grid-container">
+                <div className="field-10-box">
+                  <div className="field-10-label">⏱️ 1. Login Time</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field1_loginTime}</div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">👤 2. Full Name</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field2_fullName}</div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">🎓 3. Student Registration No.</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field3_studentRegNo}</div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">🏛️ 4. TTD Audit Unit Details attending today</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field4_unitDetails}</div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">📍 5. TTD Audit Sub-Unit Details attending today</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field5_subUnitDetails}</div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">📋 6. Type of audit work done for</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field6_auditWorkType}</div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">🎯 7. Today's work Objective</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field7_workObjective}</div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">✅ 8. Todays 's work to be achieved by end of day</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field8_workToBeAchieved}</div>
+                </div>
+
+                <div className="field-10-box" style={{ gridColumn: 'span 2' }}>
+                  <div className="field-10-label">✍️ 9. Remarks that you need the CA heading audit/management team of audit the to know</div>
+                  <div className="field-10-value" style={{ color: '#B91C1C' }}>
+                    {inspecting11FieldRecord.field9_caRemarks || 'No critical remarks recorded.'}
+                  </div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">🤝 10. Point of Contact Name[ POC ] within the unit</div>
+                  <div className="field-10-value">{inspecting11FieldRecord.field10_pocName}</div>
+                </div>
+
+                <div className="field-10-box">
+                  <div className="field-10-label">🏁 11. Logout Time</div>
+                  <div className="field-10-value" style={{ color: '#10B981' }}>{inspecting11FieldRecord.field11_logoutTime}</div>
+                </div>
+              </div>
+
+              {(inspecting11FieldRecord.loginLocation || inspecting11FieldRecord.logoutLocation) && (
+                <div style={{ marginTop: '1rem', padding: '1rem', border: '1px solid #D1FAE5', background: '#F0FDF4', borderRadius: '14px' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: '900', color: '#065F46', marginBottom: '0.65rem' }}>
+                    📍 GPS Verification
+                  </div>
+                  {inspecting11FieldRecord.loginLocation && (
+                    <div style={{ fontSize: '0.78rem', color: '#065F46', marginBottom: '0.4rem', fontWeight: '700' }}>
+                      Login: {Number(inspecting11FieldRecord.loginLocation.latitude).toFixed(6)}, {Number(inspecting11FieldRecord.loginLocation.longitude).toFixed(6)}
+                      {inspecting11FieldRecord.loginLocation.accuracyMeters != null ? ` • ±${Math.round(Number(inspecting11FieldRecord.loginLocation.accuracyMeters))} m` : ''}
+                      {' • '}
+                      <a
+                        href={`https://maps.google.com/?q=${inspecting11FieldRecord.loginLocation.latitude},${inspecting11FieldRecord.loginLocation.longitude}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: '#2563EB', fontWeight: '800' }}
+                      >Open Map</a>
+                    </div>
+                  )}
+                  {inspecting11FieldRecord.logoutLocation && (
+                    <div style={{ fontSize: '0.78rem', color: '#065F46', fontWeight: '700' }}>
+                      Logout: {Number(inspecting11FieldRecord.logoutLocation.latitude).toFixed(6)}, {Number(inspecting11FieldRecord.logoutLocation.longitude).toFixed(6)}
+                      {inspecting11FieldRecord.logoutLocation.accuracyMeters != null ? ` • ±${Math.round(Number(inspecting11FieldRecord.logoutLocation.accuracyMeters))} m` : ''}
+                      {' • '}
+                      <a
+                        href={`https://maps.google.com/?q=${inspecting11FieldRecord.logoutLocation.latitude},${inspecting11FieldRecord.logoutLocation.longitude}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: '#2563EB', fontWeight: '800' }}
+                      >Open Map</a>
+                    </div>
+                  )}
                 </div>
               )}
 
-              <div className="mom-dialog-actions">
-                <button type="button" className="btn-mom-cancel" onClick={() => setShowTaskDialog(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn-mom-save">
-                  💾 Create Task
+              {/* ── SECTION B: 3-MONTH HISTORICAL SHIFT LOGIN/LOGOUT TIMELINE (PAGINATED 10 PER PAGE) ── */}
+              <div className="modal-history-section">
+                <div className="modal-history-title">
+                  <span>📅 Past 3-Month Shift Login & Logout History Ledger</span>
+                  <span style={{ fontSize: '0.78rem', background: '#F1F5F9', color: '#2563EB', padding: '0.25rem 0.65rem', borderRadius: '8px', fontWeight: '800' }}>
+                    Total {selectedAuditorHistory.length} Past Shift Logs
+                  </span>
+                </div>
+
+                <div className="modal-history-table-wrapper">
+                  <table className="modal-history-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Shift Date</th>
+                        <th>Login Time</th>
+                        <th>Logout Time</th>
+                        <th>Sub-Unit Desk Location</th>
+                        <th>Work Objective</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedModalHistory.map((item, hIdx) => {
+                        const hGlobalIndex = (modalHistoryPage - 1) * ITEMS_PER_PAGE + hIdx + 1;
+                        return (
+                          <tr key={item.id || hIdx}>
+                            <td><strong>{hGlobalIndex}</strong></td>
+                            <td><span style={{ fontWeight: '700', color: '#0F172A' }}>{item.rawDate}</span></td>
+                            <td><span style={{ color: '#2563EB', fontWeight: '800' }}>⏱️ {item.field1_loginTime}</span></td>
+                            <td><span style={{ color: '#10B981', fontWeight: '800' }}>🏁 {item.field11_logoutTime}</span></td>
+                            <td>📍 {item.field5_subUnitDetails}</td>
+                            <td>🎯 {item.field7_workObjective}</td>
+                            <td>
+                              <span className="status-badge-pill completed" style={{ fontSize: '0.7rem' }}>
+                                ✅ Verified Shift
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+
+                  {/* Modal History Ledger Pagination (10 Items Per Page) */}
+                  <div className="modal-history-pagination">
+                    <div>
+                      Showing page <strong>{modalHistoryPage}</strong> of <strong>{totalModalHistoryPages}</strong> ({selectedAuditorHistory.length} historical logs)
+                    </div>
+
+                    <div className="pagination-btns-group">
+                      <button
+                        className="page-nav-btn"
+                        disabled={modalHistoryPage === 1}
+                        onClick={() => setModalHistoryPage(prev => Math.max(prev - 1, 1))}
+                      >
+                        ◀ Prev 10
+                      </button>
+
+                      {Array.from({ length: totalModalHistoryPages }, (_, i) => i + 1).map(p => (
+                        <button
+                          key={p}
+                          className={`page-number-btn ${modalHistoryPage === p ? 'active' : ''}`}
+                          onClick={() => setModalHistoryPage(p)}
+                        >
+                          {p}
+                        </button>
+                      ))}
+
+                      <button
+                        className="page-nav-btn"
+                        disabled={modalHistoryPage === totalModalHistoryPages}
+                        onClick={() => setModalHistoryPage(prev => Math.min(prev + 1, totalModalHistoryPages))}
+                      >
+                        Next 10 ▶
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1.5rem', textAlign: 'right' }}>
+                <button
+                  onClick={() => setInspecting11FieldRecord(null)}
+                  style={{ background: '#0F172A', color: '#FFFFFF', border: 'none', padding: '0.65rem 1.5rem', borderRadius: '10px', fontSize: '0.85rem', fontWeight: '800', cursor: 'pointer' }}
+                >
+                  Close History Window
                 </button>
               </div>
-            </form>
-
+            </div>
           </div>
         </div>
       )}
 
-      </main>
+      {/* ── MODAL: ADD NEW AUDITOR ── */}
+      {showCreateUserModal && (
+        <div className="modal-admin-overlay" onClick={() => setShowCreateUserModal(false)}>
+          <div className="modal-admin-card" style={{ maxWidth: '520px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-admin-header">
+              <div>
+                <div className="modal-admin-title">👤 Provision New Auditor User Account</div>
+                <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: '0.15rem' }}>
+                  Super Admin provisions User Auditor Logins (User Name, User ID & Assigned TTD Unit)
+                </div>
+              </div>
+              <button className="modal-close-btn" onClick={() => setShowCreateUserModal(false)}>✕</button>
+            </div>
+            <form onSubmit={handleCreateUserSubmit} className="modal-admin-body">
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '800', color: '#475569', marginBottom: '0.35rem' }}>AUDITOR FULL NAME</label>
+                <input
+                  type="text"
+                  required
+                  value={newUserName}
+                  onChange={e => setNewUserName(e.target.value)}
+                  placeholder="e.g. Satish Kumar Reddy"
+                  style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1' }}
+                />
+              </div>
 
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '800', color: '#475569', marginBottom: '0.35rem' }}>EMAIL ADDRESS / USERNAME</label>
+                <input
+                  type="text"
+                  required
+                  value={newUserEmail}
+                  onChange={e => setNewUserEmail(e.target.value)}
+                  placeholder="auditor@ttd.gov.in"
+                  style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '800', color: '#475569', marginBottom: '0.35rem' }}>INITIAL PASSWORD</label>
+                <input
+                  type="password"
+                  required
+                  value={newUserPassword}
+                  onChange={e => setNewUserPassword(e.target.value)}
+                  placeholder="••••••••"
+                  style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '800', color: '#475569', marginBottom: '0.35rem' }}>DESIGNATION ROLE</label>
+                <select
+                  value={newUserRoleTitle}
+                  onChange={e => setNewUserRoleTitle(e.target.value)}
+                  style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1' }}
+                >
+                  {AUDITOR_ROLES.map((r, i) => (
+                    <option key={i} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: '800', color: '#475569' }}>ASSIGNED TTD UNITS (SELECT MULTIPLE)</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (newUserUnits.length === ORGANIZATIONAL_UNITS.length) {
+                        setNewUserUnits([ORGANIZATIONAL_UNITS[0]]);
+                      } else {
+                        setNewUserUnits([...ORGANIZATIONAL_UNITS]);
+                      }
+                    }}
+                    style={{ background: 'none', border: 'none', color: '#2563EB', fontSize: '0.72rem', fontWeight: '800', cursor: 'pointer' }}
+                  >
+                    {newUserUnits.length === ORGANIZATIONAL_UNITS.length ? 'Deselect All' : 'Select All 8 Units'}
+                  </button>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.45rem', maxHeight: '180px', overflowY: 'auto', padding: '0.5rem', background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: '10px' }}>
+                  {ORGANIZATIONAL_UNITS.map((u, i) => {
+                    const isChecked = newUserUnits.includes(u);
+                    return (
+                      <label
+                        key={i}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.4rem 0.6rem', background: isChecked ? '#EFF6FF' : '#FFFFFF', border: isChecked ? '1px solid #93C5FD' : '1px solid #E2E8F0', borderRadius: '8px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: isChecked ? '800' : '600', color: isChecked ? '#1E40AF' : '#334155' }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {
+                            if (isChecked) {
+                              if (newUserUnits.length > 1) {
+                                setNewUserUnits(newUserUnits.filter(x => x !== u));
+                              }
+                            } else {
+                              setNewUserUnits([...newUserUnits, u]);
+                            }
+                          }}
+                          style={{ width: '15px', height: '15px', accentColor: '#2563EB' }}
+                        />
+                        <span>🏛️ {u}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: '#64748B', marginTop: '0.35rem', fontWeight: '600' }}>
+                  Selected: <span style={{ color: '#2563EB', fontWeight: '800' }}>{newUserUnits.length} TTD Unit(s)</span> assigned to this auditor.
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                style={{ width: '100%', padding: '0.75rem', background: '#2563EB', color: '#FFFFFF', border: 'none', borderRadius: '10px', fontWeight: '800', cursor: 'pointer' }}
+              >
+                Create Auditor Account →
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL: EDIT ROLE & UNIT ── */}
+      {editingUserRole && (
+        <div className="modal-admin-overlay" onClick={() => setEditingUserRole(null)}>
+          <div className="modal-admin-card" style={{ maxWidth: '480px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-admin-header">
+              <div className="modal-admin-title">✏️ Edit Role & Unit Assignment</div>
+              <button className="modal-close-btn" onClick={() => setEditingUserRole(null)}>✕</button>
+            </div>
+            <div className="modal-admin-body">
+              <div style={{ marginBottom: '1rem' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '800', color: '#64748B' }}>AUDITOR</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: '800', color: '#0F172A' }}>{editingUserRole.name}</div>
+                <div style={{ fontSize: '0.8rem', color: '#2563EB' }}>{editingUserRole.email}</div>
+              </div>
+
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '800', color: '#475569', marginBottom: '0.35rem' }}>DESIGNATION ROLE</label>
+                <select
+                  value={editingUserRole.roleTitle || AUDITOR_ROLES[0]}
+                  onChange={e => setEditingUserRole({ ...editingUserRole, roleTitle: e.target.value })}
+                  style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1' }}
+                >
+                  {AUDITOR_ROLES.map((r, i) => (
+                    <option key={i} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '800', color: '#475569', marginBottom: '0.35rem' }}>ASSIGNED TTD UNIT</label>
+                <select
+                  value={editingUserRole.unit || ORGANIZATIONAL_UNITS[0]}
+                  onChange={e => setEditingUserRole({ ...editingUserRole, unit: e.target.value })}
+                  style={{ width: '100%', padding: '0.65rem', borderRadius: '8px', border: '1px solid #CBD5E1' }}
+                >
+                  {ORGANIZATIONAL_UNITS.map((u, i) => (
+                    <option key={i} value={u}>{u}</option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                onClick={() => {
+                  setUsersDb(prev => prev.map(u => u.id === editingUserRole.id ? editingUserRole : u));
+                  setEditingUserRole(null);
+                }}
+                style={{ width: '100%', padding: '0.75rem', background: '#059669', color: '#FFFFFF', border: 'none', borderRadius: '10px', fontWeight: '800', cursor: 'pointer' }}
+              >
+                Save Assignment Updates
+              </button>
+
+              {editingUserRole.role !== 'SUPER_ADMIN' && editingUserRole.email !== 'admin' && (
+                <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #F1F5F9' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteUser(editingUserRole)}
+                    style={{ width: '100%', padding: '0.75rem', background: '#FEF2F2', color: '#DC2626', border: '1.5px solid #FCA5A5', borderRadius: '10px', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                  >
+                    🗑️ Remove the Auditor Account
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL: SUPER ADMIN PROFILE & LOGIN/LOGOUT SESSION LEDGER ── */}
+      {showAdminProfileModal && (
+        <div className="modal-admin-overlay" onClick={() => setShowAdminProfileModal(false)}>
+          <div className="modal-admin-card" style={{ maxWidth: '650px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-admin-header" style={{ background: '#0F172A', color: '#FFFFFF', padding: '1rem 1.25rem', borderRadius: '16px 16px 0 0' }}>
+              <div className="modal-admin-title" style={{ color: '#FFFFFF' }}>
+                🔑 Super Admin Profile & Session Ledger
+              </div>
+              <button className="modal-close-btn" style={{ color: '#94A3B8' }} onClick={() => setShowAdminProfileModal(false)}>✕</button>
+            </div>
+
+            <div className="modal-admin-body" style={{ padding: '1.25rem' }}>
+              {/* Profile Card Header */}
+              <div style={{ background: 'linear-gradient(135deg, #1E293B 0%, #0F172A 100%)', color: '#FFFFFF', padding: '1.25rem', borderRadius: '14px', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <span style={{ background: '#2563EB', color: '#FFFFFF', fontSize: '0.68rem', fontWeight: '800', padding: '0.2rem 0.6rem', borderRadius: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    SUPER ADMINISTRATOR
+                  </span>
+                  <h3 style={{ margin: '0.3rem 0 0.1rem', fontSize: '1.2rem', fontWeight: '900', color: '#FFFFFF' }}>{currentUser.name}</h3>
+                  <div style={{ fontSize: '0.8rem', color: '#93C5FD', fontWeight: '700' }}>🎓 Reg No: {currentUser.studentRegNo || 'FCA108920'}</div>
+                  <div style={{ fontSize: '0.75rem', color: '#94A3B8', marginTop: '0.2rem' }}>📧 Email: {currentUser.email} | 🏛️ Unit: {currentUser.unit}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <span style={{ fontSize: '0.75rem', background: '#059669', color: '#FFFFFF', padding: '0.25rem 0.65rem', borderRadius: '8px', fontWeight: '800' }}>
+                    🟢 ACTIVE SESSION
+                  </span>
+                  <div style={{ fontSize: '0.72rem', color: '#34D399', marginTop: '0.4rem', fontWeight: '700' }}>
+                    Server Verified (Anti-Tamper)
+                  </div>
+                </div>
+              </div>
+
+              {/* Captured GPS Location Block */}
+              <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '12px', padding: '1rem', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: '800', color: '#1E40AF', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    📍 Captured Login GPS Location Coordinates
+                  </span>
+                  {adminLocation && (
+                    <a
+                      href={adminLocation.mapsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ background: '#2563EB', color: '#FFFFFF', padding: '0.25rem 0.7rem', borderRadius: '6px', fontSize: '0.74rem', fontWeight: '800', textDecoration: 'none' }}
+                    >
+                      🌐 View on Google Maps ↗
+                    </a>
+                  )}
+                </div>
+
+                {adminLocation ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginTop: '0.5rem' }}>
+                    <div style={{ background: '#FFFFFF', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #DBEAFE' }}>
+                      <div style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: '700' }}>LATITUDE</div>
+                      <div style={{ fontSize: '0.9rem', color: '#1E3A8A', fontWeight: '900' }}>{adminLocation.lat}° N</div>
+                    </div>
+                    <div style={{ background: '#FFFFFF', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #DBEAFE' }}>
+                      <div style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: '700' }}>LONGITUDE</div>
+                      <div style={{ fontSize: '0.9rem', color: '#1E3A8A', fontWeight: '900' }}>{adminLocation.lng}° E</div>
+                    </div>
+                    <div style={{ background: '#FFFFFF', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #DBEAFE' }}>
+                      <div style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: '700' }}>ACCURACY / SENSOR</div>
+                      <div style={{ fontSize: '0.9rem', color: '#059669', fontWeight: '900' }}>±{adminLocation.accuracy}m (Hardware)</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.78rem', color: '#64748B' }}>
+                    Location not captured yet. Click "📍 Enable & Capture GPS Location" on login.
+                  </div>
+                )}
+              </div>
+
+              {/* Login & Logout History Table */}
+              <h4 style={{ fontSize: '0.9rem', fontWeight: '800', color: '#0F172A', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                ⏱️ Super Admin Session History & Login/Logout Timestamps
+              </h4>
+
+              <div style={{ overflowX: 'auto', border: '1px solid #E2E8F0', borderRadius: '12px' }}>
+                <table className="master-10-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Session Date</th>
+                      <th>Login Time</th>
+                      <th>Logout Time</th>
+                      <th>Duration</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><span className="field-pill-number">1</span></td>
+                      <td style={{ fontWeight: '700' }}>Today ({new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })})</td>
+                      <td><span style={{ color: '#2563EB', fontWeight: '800', background: '#EFF6FF', padding: '0.2rem 0.5rem', borderRadius: '6px' }}>⏱️ 09:00:00 AM</span></td>
+                      <td><span style={{ color: '#059669', fontWeight: '800', background: '#ECFDF5', padding: '0.2rem 0.5rem', borderRadius: '6px' }}>Session Active (Logged In)</span></td>
+                      <td style={{ fontWeight: '700', color: '#475569' }}>Active</td>
+                      <td><span className="status-badge-pill completed">VERIFIED</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-

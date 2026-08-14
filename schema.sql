@@ -1,85 +1,193 @@
 -- ==============================================================================
--- CA Buddy Enterprise Audit System - MySQL Production Database Schema (cPanel)
--- Database: servobite_audit_db (or your cPanel database name)
+-- CA BUDDY ENTERPRISE AUDIT SYSTEM - UNIVERSAL MYSQL DATABASE SCHEMA
+-- Compatible with ServerByte (serverbyte.in), cPanel & Standard MySQL
 -- ==============================================================================
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+SET time_zone = '+05:30';
 
--- ------------------------------------------------------------------------------
--- 1. Table structure for `users`
--- ------------------------------------------------------------------------------
+-- ==============================================================================
+-- 1. TABLE: `users` (Auditor & Administrator Directory)
+-- ==============================================================================
 DROP TABLE IF EXISTS `users`;
 CREATE TABLE `users` (
   `id` VARCHAR(64) NOT NULL,
+  `user_id` VARCHAR(64) NOT NULL,
   `name` VARCHAR(191) NOT NULL,
-  `email` VARCHAR(191) NOT NULL UNIQUE,
-  `password` VARCHAR(255) NOT NULL DEFAULT '1234567',
+  `full_name` VARCHAR(191) NULL,
+  `email` VARCHAR(191) NULL,
+  `password` VARCHAR(255) NULL,
+  `password_hash` VARCHAR(255) NULL,
   `role` ENUM('SUPER_ADMIN', 'MANAGER', 'USER') NOT NULL DEFAULT 'USER',
   `role_title` VARCHAR(100) NOT NULL DEFAULT 'Field Auditor',
   `unit` VARCHAR(255) NOT NULL DEFAULT 'Procurement [Marketing Department]',
+  `student_reg_no` VARCHAR(100) NULL,
+  `registration_no` VARCHAR(100) NULL,
+  `phone` VARCHAR(32) NULL,
+  `sub_unit` VARCHAR(255) NULL,
+  `joined_date` DATE NULL,
+  `active` TINYINT(1) NOT NULL DEFAULT 1,
   `managed_by` VARCHAR(64) NULL,
-  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` VARCHAR(64) NULL,
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (`id`),
-  INDEX `idx_users_email` (`email`),
+  UNIQUE KEY `uq_users_user_id` (`user_id`),
+  UNIQUE KEY `uq_users_email` (`email`),
   INDEX `idx_users_role` (`role`),
-  INDEX `idx_users_manager` (`managed_by`)
+  INDEX `idx_users_unit` (`unit`),
+  INDEX `idx_users_active` (`active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ------------------------------------------------------------------------------
--- 2. Table structure for `attendance`
--- ------------------------------------------------------------------------------
+-- ==============================================================================
+-- 2. TABLE: `audit_units` (The 8 Official TTD Units)
+-- ==============================================================================
+DROP TABLE IF EXISTS `audit_units`;
+CREATE TABLE `audit_units` (
+  `id` SMALLINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `code` VARCHAR(32) NOT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `active` TINYINT(1) NOT NULL DEFAULT 1,
+  `sort_order` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_audit_units_code` (`code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==============================================================================
+-- 3. TABLE: `user_sessions` (Anti-Tamper & GPS Location Ledger)
+-- ==============================================================================
+DROP TABLE IF EXISTS `user_sessions`;
+CREATE TABLE `user_sessions` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id` VARCHAR(64) NOT NULL,
+  `login_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `logout_at` DATETIME(6) NULL,
+  `login_lat` DECIMAL(10,7) NULL,
+  `login_lng` DECIMAL(10,7) NULL,
+  `login_accuracy_m` DECIMAL(10,2) NULL,
+  `logout_lat` DECIMAL(10,7) NULL,
+  `logout_lng` DECIMAL(10,7) NULL,
+  `logout_accuracy_m` DECIMAL(10,2) NULL,
+  `status` ENUM('ACTIVE', 'CLOSED', 'REVOKED') NOT NULL DEFAULT 'ACTIVE',
+  `token_jti` VARCHAR(128) NULL,
+  `user_agent` VARCHAR(512) NULL,
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_user_sessions_token_jti` (`token_jti`),
+  INDEX `idx_user_sessions_user` (`user_id`),
+  INDEX `idx_user_sessions_status` (`status`),
+  CONSTRAINT `fk_user_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==============================================================================
+-- 4. TABLE: `attendance` (Shift Attendance & Daily Handover Ledger)
+-- ==============================================================================
 DROP TABLE IF EXISTS `attendance`;
 CREATE TABLE `attendance` (
   `id` VARCHAR(64) NOT NULL,
   `user_id` VARCHAR(64) NOT NULL,
   `user_name` VARCHAR(191) NOT NULL,
-  `user_email` VARCHAR(191) NOT NULL,
+  `user_email` VARCHAR(191) NULL,
   `manager_id` VARCHAR(64) NULL,
   `role_title` VARCHAR(100) NOT NULL,
   `unit` VARCHAR(255) NOT NULL,
-  `login_time` VARCHAR(30) NOT NULL,
-  `logout_time` VARCHAR(30) NULL,
-  `date_str` VARCHAR(30) NOT NULL,
-  `time_window` VARCHAR(80) NOT NULL,
-  `duration` VARCHAR(50) NOT NULL DEFAULT 'Session Active',
+  `sub_unit_details` VARCHAR(255) NULL,
+  `audit_work_type` VARCHAR(255) NULL,
+  `detailed_description` TEXT NULL,
+  `key_escalations` TEXT NULL,
+  `login_at` DATETIME(6) NOT NULL,
+  `logout_at` DATETIME(6) NULL,
+  `duration_minutes` INT UNSIGNED NULL,
   `is_active` TINYINT(1) NOT NULL DEFAULT 1,
   `server_verified` TINYINT(1) NOT NULL DEFAULT 1,
-  `server_utc_iso` VARCHAR(50) NULL,
   `manager_remarks` TEXT NULL,
-  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (`id`),
   INDEX `idx_att_user` (`user_id`),
-  INDEX `idx_att_manager` (`manager_id`),
   INDEX `idx_att_active` (`is_active`),
-  INDEX `idx_att_date` (`date_str`)
+  INDEX `idx_att_unit` (`unit`),
+  INDEX `idx_att_login` (`login_at`),
+  CONSTRAINT `fk_attendance_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_attendance_manager` FOREIGN KEY (`manager_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ------------------------------------------------------------------------------
--- 3. Table structure for `assignments`
--- ------------------------------------------------------------------------------
-DROP TABLE IF EXISTS `assignments`;
-CREATE TABLE `assignments` (
-  `id` VARCHAR(64) NOT NULL,
-  `assigned_to_id` VARCHAR(64) NOT NULL,
-  `assigned_to_name` VARCHAR(191) NOT NULL,
-  `manager_id` VARCHAR(64) NOT NULL,
-  `manager_name` VARCHAR(191) NOT NULL,
-  `unit` VARCHAR(255) NOT NULL,
-  `task_title` VARCHAR(255) NOT NULL,
-  `instructions` TEXT NULL,
-  `deadline` VARCHAR(80) NOT NULL,
-  `status` VARCHAR(50) NOT NULL DEFAULT 'ASSIGNED',
-  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-- ==============================================================================
+-- 5. TABLE: `daily_duties` (Daily Shift Duty Directives)
+-- ==============================================================================
+DROP TABLE IF EXISTS `daily_duties`;
+CREATE TABLE `daily_duties` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `session_id` BIGINT UNSIGNED NULL,
+  `user_id` VARCHAR(64) NOT NULL,
+  `primary_unit_id` SMALLINT UNSIGNED NOT NULL,
+  `sub_unit` VARCHAR(255) NULL,
+  `audit_cycle` ENUM('MONTHLY', 'QUARTERLY', 'HALF_YEARLY') NOT NULL DEFAULT 'MONTHLY',
+  `objective` TEXT NOT NULL,
+  `planned_activity` TEXT NOT NULL,
+  `poc_name` VARCHAR(191) NOT NULL,
+  `management_note` TEXT NULL,
+  `additional_assignment` TEXT NULL,
+  `completion_status` ENUM('COMPLETED', 'PARTIALLY_COMPLETED', 'NOT_COMPLETED') NULL,
+  `completion_notes` TEXT NULL,
+  `escalations` TEXT NULL,
+  `work_notes` TEXT NULL,
+  `status` ENUM('OPEN', 'CLOSED') NOT NULL DEFAULT 'OPEN',
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `closed_at` DATETIME(6) NULL,
   PRIMARY KEY (`id`),
-  INDEX `idx_asn_user` (`assigned_to_id`),
-  INDEX `idx_asn_manager` (`manager_id`)
+  INDEX `idx_daily_duties_user` (`user_id`),
+  INDEX `idx_daily_duties_unit` (`primary_unit_id`),
+  INDEX `idx_daily_duties_status` (`status`),
+  CONSTRAINT `fk_daily_duties_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_daily_duties_unit` FOREIGN KEY (`primary_unit_id`) REFERENCES `audit_units` (`id`),
+  CONSTRAINT `fk_daily_duties_session` FOREIGN KEY (`session_id`) REFERENCES `user_sessions` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ------------------------------------------------------------------------------
--- 4. Table structure for `complaints`
--- ------------------------------------------------------------------------------
+-- ==============================================================================
+-- 6. TABLE: `audit_process_areas`
+-- ==============================================================================
+DROP TABLE IF EXISTS `audit_process_areas`;
+CREATE TABLE `audit_process_areas` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `unit_id` SMALLINT UNSIGNED NOT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `sort_order` INT NOT NULL DEFAULT 0,
+  `active` TINYINT(1) NOT NULL DEFAULT 1,
+  PRIMARY KEY (`id`),
+  INDEX `idx_process_unit` (`unit_id`),
+  CONSTRAINT `fk_process_unit` FOREIGN KEY (`unit_id`) REFERENCES `audit_units` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==============================================================================
+-- 7. TABLE: `audit_observations` (Audit Findings & Management Replies)
+-- ==============================================================================
+DROP TABLE IF EXISTS `audit_observations`;
+CREATE TABLE `audit_observations` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `daily_duty_id` BIGINT UNSIGNED NULL,
+  `user_id` VARCHAR(64) NOT NULL,
+  `unit_id` SMALLINT UNSIGNED NOT NULL,
+  `process_area_id` BIGINT UNSIGNED NULL,
+  `custom_issue` TEXT NULL,
+  `finding` TEXT NOT NULL,
+  `management_reply` TEXT NULL,
+  `status` ENUM('DRAFT', 'SUBMITTED', 'REVIEWED') NOT NULL DEFAULT 'DRAFT',
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `submitted_at` DATETIME(6) NULL,
+  PRIMARY KEY (`id`),
+  INDEX `idx_observation_user` (`user_id`),
+  INDEX `idx_observation_unit` (`unit_id`),
+  INDEX `idx_observation_status` (`status`),
+  CONSTRAINT `fk_observation_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_observation_unit` FOREIGN KEY (`unit_id`) REFERENCES `audit_units` (`id`),
+  CONSTRAINT `fk_observation_duty` FOREIGN KEY (`daily_duty_id`) REFERENCES `daily_duties` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_observation_process_area` FOREIGN KEY (`process_area_id`) REFERENCES `audit_process_areas` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==============================================================================
+-- 8. TABLE: `complaints` (Audit Escalations & File Evidence Attachments)
+-- ==============================================================================
 DROP TABLE IF EXISTS `complaints`;
 CREATE TABLE `complaints` (
   `id` VARCHAR(64) NOT NULL,
@@ -90,60 +198,96 @@ CREATE TABLE `complaints` (
   `remarks` TEXT NULL,
   `file_name` VARCHAR(255) NULL,
   `file_type` VARCHAR(100) NULL,
-  `file_size` VARCHAR(50) NULL,
-  `file_data` LONGTEXT NULL,
-  `sample_file_url` TEXT NULL,
+  `file_size_bytes` BIGINT UNSIGNED NULL,
+  `file_url` TEXT NULL,
+  `storage_key` VARCHAR(512) NULL,
   `auditor_id` VARCHAR(64) NOT NULL,
   `auditor_name` VARCHAR(191) NOT NULL,
   `manager_id` VARCHAR(64) NULL,
   `manager_name` VARCHAR(191) NULL,
-  `date_str` VARCHAR(30) NOT NULL,
-  `time_frame` VARCHAR(100) NOT NULL,
-  `server_timestamp` VARCHAR(60) NOT NULL,
-  `status` VARCHAR(50) NOT NULL DEFAULT 'SUBMITTED',
+  `status` ENUM('SUBMITTED', 'UNDER_REVIEW', 'RESOLVED', 'REJECTED') NOT NULL DEFAULT 'SUBMITTED',
   `robot_verified` TINYINT(1) NOT NULL DEFAULT 1,
-  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (`id`),
   INDEX `idx_cmp_unit` (`unit`),
-  INDEX `idx_cmp_manager` (`manager_id`),
   INDEX `idx_cmp_urgency` (`urgency`),
-  INDEX `idx_cmp_status` (`status`)
+  INDEX `idx_cmp_status` (`status`),
+  INDEX `idx_cmp_auditor` (`auditor_id`),
+  CONSTRAINT `fk_complaints_auditor` FOREIGN KEY (`auditor_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_complaints_manager` FOREIGN KEY (`manager_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ==============================================================================
--- INITIAL SEED DATA (Ready-to-use Accounts & Evidence Records)
+-- 9. TABLE: `tasks` (Directive Task Assignments)
+-- ==============================================================================
+DROP TABLE IF EXISTS `tasks`;
+CREATE TABLE `tasks` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `created_by` VARCHAR(64) NOT NULL,
+  `assigned_to` VARCHAR(64) NULL,
+  `title` VARCHAR(255) NOT NULL,
+  `description` TEXT NULL,
+  `priority` ENUM('LOW', 'MEDIUM', 'HIGH') NOT NULL DEFAULT 'MEDIUM',
+  `due_at` DATETIME(6) NULL,
+  `status` ENUM('TODO', 'IN_PROGRESS', 'DONE', 'CANCELLED') NOT NULL DEFAULT 'TODO',
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  INDEX `idx_tasks_created_by` (`created_by`),
+  INDEX `idx_tasks_assigned_to` (`assigned_to`),
+  INDEX `idx_tasks_status` (`status`),
+  INDEX `idx_tasks_due` (`due_at`),
+  CONSTRAINT `fk_tasks_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_tasks_assigned_to` FOREIGN KEY (`assigned_to`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==============================================================================
+-- 10. TABLE: `user_auditor_logs` (Master 11-Field Executive Duty Log Summary)
+-- ==============================================================================
+DROP TABLE IF EXISTS `user_auditor_logs`;
+CREATE TABLE `user_auditor_logs` (
+  `id` VARCHAR(64) NOT NULL,
+  `user_id` VARCHAR(64) NULL,
+  `field1_login_time` VARCHAR(100) NOT NULL,
+  `field2_full_name` VARCHAR(191) NOT NULL,
+  `field3_student_reg_no` VARCHAR(100) NULL,
+  `field4_unit_details` VARCHAR(255) NOT NULL,
+  `field5_subunit_details` VARCHAR(255) NULL,
+  `field6_audit_work_type` VARCHAR(255) NULL,
+  `field7_work_objective` TEXT NULL,
+  `field8_work_to_be_achieved` TEXT NULL,
+  `field9_ca_remarks` TEXT NULL,
+  `field10_poc_name` VARCHAR(191) NULL,
+  `field11_logout_time` VARCHAR(100) NULL,
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  INDEX `idx_logs_user_id` (`user_id`),
+  INDEX `idx_logs_unit` (`field4_unit_details`),
+  INDEX `idx_logs_user` (`field2_full_name`),
+  INDEX `idx_logs_reg` (`field3_student_reg_no`),
+  CONSTRAINT `fk_auditor_logs_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==============================================================================
+-- PRODUCTION SEED DATA (Official TTD Units & Primary Super Admin Account)
 -- ==============================================================================
 
--- 1. Insert Master Accounts
-INSERT INTO `users` (`id`, `name`, `email`, `password`, `role`, `role_title`, `unit`, `managed_by`) VALUES
-('usr-1', 'Executive Super Admin', 'admin@eluc', '1234567', 'SUPER_ADMIN', 'Super Administrator', 'All Enterprise Units', NULL),
-('usr-2', 'Suresh N., Audit Manager', 'manager@eluc', '1234567', 'MANAGER', 'Department Audit Manager', 'Auctions', 'usr-1'),
-('usr-3', 'Ravi Teja, Field Auditor', 'auditor@eluc', '1234567', 'USER', 'Field Auditor', 'Auctions', 'usr-2'),
-('usr-4', 'Priya Sharma, ACA', 'priya@eluc', '1234567', 'USER', 'Junior Auditor', 'Auctions', 'usr-2'),
-('usr-5', 'Ananya Rao, Field Staff', 'ananya@eluc', '1234567', 'USER', 'Compliance Officer', 'Kalyanakatta', 'usr-1'),
-('usr-6', 'Vikram Mehta, Auditor', 'vikram@eluc', '1234567', 'USER', 'Field Auditor', 'Warehousing [Marketing Department]', 'usr-1')
-ON DUPLICATE KEY UPDATE `name`=VALUES(`name`);
+-- Seed: 8 Official TTD Audit Units
+INSERT INTO `audit_units` (`code`, `name`, `active`, `sort_order`) VALUES
+('PROCUREMENT',  'Procurement [Marketing Department]', 1, 1),
+('WAREHOUSING',  'Warehousing [Marketing Department]', 1, 2),
+('DONOR_CELL',   'Donor Cell along with Concurrent Audit on Donations, Allied Trusts and Srivani Trust Receipts [Tirumala]', 1, 3),
+('KALYANAKATTA', 'Kalyanakatta & Kalyanavedika [Tirumala]', 1, 4),
+('ANNAPRASADAM', 'Annaprasadam Trust and Canteens TML & TPT', 1, 5),
+('SRI_PAT',      'Sri Padmavathi Ammavari Temple, Tiruchanoor (Sri PAT)', 1, 6),
+('RECEPTION',    'Reception, TML including Marriage Halls', 1, 7),
+('AUCTIONS',     'Auctions [Marketing Department]', 1, 8)
+ON DUPLICATE KEY UPDATE `name`=VALUES(`name`), `active`=VALUES(`active`), `sort_order`=VALUES(`sort_order`);
 
--- 2. Insert Attendance Logs
-INSERT INTO `attendance` (`id`, `user_id`, `user_name`, `user_email`, `manager_id`, `role_title`, `unit`, `login_time`, `logout_time`, `date_str`, `time_window`, `duration`, `is_active`, `server_verified`, `manager_remarks`) VALUES
-('log-1', 'usr-3', 'Ravi Teja, Field Auditor', 'auditor@eluc', 'usr-2', 'Field Auditor', 'Auctions', '09:02:14 AM', NULL, '12-Aug-2026', '09:02 AM - Active', '4h 45m', 1, 1, 'Verified on-site token inventory.'),
-('log-2', 'usr-4', 'Priya Sharma, ACA', 'priya@eluc', 'usr-2', 'Junior Auditor', 'Auctions', '08:45:00 AM', '04:30:00 PM', '12-Aug-2026', '08:45 AM - 04:30 PM', '7h 45m', 0, 1, 'Audit physical tokens matched voucher book.'),
-('log-3', 'usr-5', 'Ananya Rao, Field Staff', 'ananya@eluc', 'usr-1', 'Compliance Officer', 'Kalyanakatta', '09:15:30 AM', NULL, '12-Aug-2026', '09:15 AM - Active', '4h 32m', 1, 1, 'Routine queue compliance verified.'),
-('log-4', 'usr-6', 'Vikram Mehta, Auditor', 'vikram@eluc', 'usr-1', 'Field Auditor', 'Warehousing [Marketing Department]', '08:30:00 AM', '05:00:00 PM', '12-Aug-2026', '08:30 AM - 05:00 PM', '8h 30m', 0, 1, 'Completed stock ledger reconciliation.'),
-('log-5', 'usr-2', 'Suresh N., Audit Manager', 'manager@eluc', 'usr-1', 'Department Audit Manager', 'Auctions', '08:50:00 AM', NULL, '12-Aug-2026', '08:50 AM - Active', '4h 55m', 1, 1, 'Manager shift active.')
-ON DUPLICATE KEY UPDATE `user_name`=VALUES(`user_name`);
-
--- 3. Insert Work Assignments
-INSERT INTO `assignments` (`id`, `assigned_to_id`, `assigned_to_name`, `manager_id`, `manager_name`, `unit`, `task_title`, `instructions`, `deadline`, `status`) VALUES
-('asn-1', 'usr-3', 'Ravi Teja, Field Auditor', 'usr-2', 'Suresh N., Audit Manager', 'Auctions', 'Concurrent Physical Bid Token Audit', 'Cross-check day-end auction sheet against cash counter collection ledger and upload token report PDF.', 'Today, 05:00 PM', 'IN_PROGRESS'),
-('asn-2', 'usr-4', 'Priya Sharma, ACA', 'usr-2', 'Suresh N., Audit Manager', 'Auctions', 'Voucher Book & E-Token Verification', 'Upload scanned voucher summary PDF or photo with day collection total.', 'Today, 04:30 PM', 'COMPLETED')
-ON DUPLICATE KEY UPDATE `task_title`=VALUES(`task_title`);
-
--- 4. Insert Complaints & Evidence Files
-INSERT INTO `complaints` (`id`, `unit`, `title`, `category`, `urgency`, `remarks`, `file_name`, `file_type`, `file_size`, `sample_file_url`, `auditor_id`, `auditor_name`, `manager_id`, `manager_name`, `date_str`, `time_frame`, `server_timestamp`, `status`, `robot_verified`) VALUES
-('CMP-2026-0812-001', 'Auctions', 'Cash Collection & Token Reconciliation', 'Cash Collection & Token Reconciliation', 'HIGH', 'Scanned voucher sheets show 3 extra tokens unrecorded in the electronic terminal.', 'token_discrepancy_evidence.pdf', 'application/pdf', '412 KB', 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', 'usr-3', 'Ravi Teja, Field Auditor', 'usr-2', 'Suresh N., Audit Manager', '12-Aug-2026', '09:02:00 AM - 10:15:00 AM (UTC+5:30)', '10:15:00 AM • 12-Aug-2026', 'UNDER_REVIEW', 1),
-('CMP-2026-0812-002', 'Procurement [Marketing Department]', 'Tender Compliance & Vendor Billing Irregularity', 'Tender Compliance & Vendor Billing Irregularity', 'CRITICAL', 'Photographic evidence attached showing broken paper seal on bidder envelope #12.', 'seal_breach_photo.png', 'image/png', '1.2 MB', 'https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=600&auto=format&fit=crop&q=80', 'usr-7', 'Kiran Reddy, Lead Auditor', 'usr-1', 'Executive Admin', '12-Aug-2026', '09:30:00 AM - 11:45:00 AM (UTC+5:30)', '11:45:00 AM • 12-Aug-2026', 'ESCALATED', 1),
-('CMP-2026-0812-003', 'Annaprasadam Trust and Canteens TML & TPT', 'Others (Manual Specification)', 'Others (Manual Specification)', 'HIGH', 'Digital thermograph report attached verifying +8°C temperature lag over 3 hours.', 'temperature_log_sheet.pdf', 'application/pdf', '298 KB', 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', 'usr-9', 'Manoj Varma, Inspector', 'usr-1', 'Canteen Directorate', '12-Aug-2026', '07:30:00 AM - 09:45:00 AM (UTC+5:30)', '09:45:00 AM • 12-Aug-2026', 'RESOLVED', 1)
-ON DUPLICATE KEY UPDATE `title`=VALUES(`title`);
+-- Seed: Primary Super Admin Account (admin / admin123)
+INSERT INTO `users` (`id`, `user_id`, `name`, `full_name`, `email`, `password`, `password_hash`, `role`, `role_title`, `unit`, `student_reg_no`, `registration_no`, `active`) VALUES
+('usr-1', 'admin', 'Super Admin', 'CAO Administration', 'admin', 'admin123', SHA2('admin123',256), 'SUPER_ADMIN', 'Super Administrator', 'All Enterprise Units', 'FCA108920', 'TTD/CAO/001', 1)
+ON DUPLICATE KEY UPDATE `name`=VALUES(`name`), `role`=VALUES(`role`), `active`=VALUES(`active`);
 
 SET FOREIGN_KEY_CHECKS = 1;

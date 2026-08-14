@@ -42,6 +42,125 @@ function getServerTimeDetails() {
 let pool = null;
 let useMySql = false;
 
+async function initializeMySqlTables() {
+  if (!pool) return;
+  try {
+    const conn = await pool.getConnection();
+    console.log('🔄 Checking database tables and running auto-initialization...');
+    
+    // Create users table
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        role VARCHAR(50) NOT NULL,
+        roleTitle VARCHAR(100),
+        studentRegNo VARCHAR(100),
+        phone VARCHAR(50),
+        unit VARCHAR(255),
+        subUnit VARCHAR(255),
+        joinedDate VARCHAR(50),
+        managedBy VARCHAR(50)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create attendance table
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS attendance (
+        id VARCHAR(50) PRIMARY KEY,
+        userId VARCHAR(50) NOT NULL,
+        userName VARCHAR(255) NOT NULL,
+        userEmail VARCHAR(255) NOT NULL,
+        managerId VARCHAR(50),
+        roleTitle VARCHAR(100),
+        unit VARCHAR(255),
+        loginTime VARCHAR(50),
+        logoutTime VARCHAR(50),
+        date VARCHAR(50),
+        timeWindow VARCHAR(100),
+        duration VARCHAR(50),
+        active BOOLEAN DEFAULT TRUE,
+        serverVerified BOOLEAN DEFAULT TRUE,
+        serverUtcIso VARCHAR(100),
+        serverLogoutIso VARCHAR(100),
+        managerRemarks TEXT,
+        loginLocation TEXT,
+        logoutLocation TEXT
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create daily_reports table
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS daily_reports (
+        id VARCHAR(50) PRIMARY KEY,
+        fullName VARCHAR(255) NOT NULL,
+        studentRegNo VARCHAR(100) NOT NULL,
+        unitDetails VARCHAR(255),
+        studentPhone VARCHAR(50),
+        dutyAssignedDate VARCHAR(50),
+        dutyTimePeriod VARCHAR(50),
+        reportVerificationTime VARCHAR(50),
+        auditWorkType VARCHAR(255),
+        workObjective TEXT,
+        vouchersVerified VARCHAR(50),
+        caRemarks TEXT,
+        status VARCHAR(100),
+        createdAt VARCHAR(100),
+        studentEmail VARCHAR(255)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create tasks table
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id VARCHAR(50) PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        priority VARCHAR(50),
+        category VARCHAR(100),
+        project VARCHAR(255),
+        assignedTo VARCHAR(255),
+        dueDate VARCHAR(50),
+        status VARCHAR(50)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create moms table
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS moms (
+        id VARCHAR(50) PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        type VARCHAR(100),
+        date VARCHAR(50),
+        time VARCHAR(50),
+        organizer VARCHAR(255),
+        location VARCHAR(255),
+        attendees TEXT,
+        agenda TEXT,
+        discussions TEXT,
+        actionItems TEXT,
+        nextMeeting TEXT
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Insert Default Super Admin Seed User
+    await conn.query(`
+      INSERT IGNORE INTO users (id, name, email, password, role, roleTitle, studentRegNo, phone, unit, subUnit, joinedDate, managedBy)
+      VALUES 
+      ('usr-1', 'Executive Super Admin', 'admin@eluc', 'admin', 'SUPER_ADMIN', 'Super Administrator', 'FCA108920', '+91 98480 12345', 'All Enterprise Units', 'Central Audit Apex Office', '01-Jan-2024', NULL),
+      ('usr-2', 'Suresh N., Audit Manager', 'manager@eluc', '1234567', 'MANAGER', 'Department Audit Manager', 'ACA219842', '+91 94401 54321', 'Auctions', 'Auctions Admin Wing & Counter #1', '15-Mar-2024', 'usr-1'),
+      ('usr-3', 'Ravi Teja, Field Auditor', 'auditor@eluc', '1234567', 'USER', 'Field Auditor', 'SRO0682194', '+91 91234 56780', 'Procurement [Marketing Department]', 'Marketing Procurement Cell & Tenders Desk', '10-Aug-2025', 'usr-2');
+    `);
+
+    console.log('✅ MySQL Database Schema Verification Complete.');
+    conn.release();
+  } catch (err) {
+    console.error('❌ MySQL Table Initialization Error:', err.message);
+  }
+}
+
 if (process.env.DB_NAME && process.env.DB_USER) {
   try {
     const dbName = process.env.DB_NAME.trim();
@@ -62,10 +181,11 @@ if (process.env.DB_NAME && process.env.DB_USER) {
 
     // Test connection
     pool.getConnection()
-      .then(conn => {
+      .then(async (conn) => {
         console.log(`✅ Connected to cPanel MySQL Database: ${process.env.DB_NAME}`);
         useMySql = true;
         conn.release();
+        await initializeMySqlTables();
       })
       .catch(err => {
         console.warn(`⚠️ MySQL Connection note (using resilient fallback): ${err.message}`);
@@ -379,10 +499,97 @@ app.post('/api/auth/login', async (req, res) => {
   const inputLower = rawInput.toLowerCase();
   const { timeStr, dateStr, isoStr } = getServerTimeDetails();
 
+  if (useMySql && pool) {
+    try {
+      let [rows] = await pool.query('SELECT * FROM users WHERE email = ? OR name = ? OR id = ?', [inputLower, inputLower, inputLower]);
+      
+      if (rows.length === 0 && (inputLower === 'admin' || inputLower === 'admin@eluc' || inputLower === 'superadmin')) {
+        [rows] = await pool.query("SELECT * FROM users WHERE role = 'SUPER_ADMIN'");
+      }
+
+      let user = rows[0];
+
+      if (!user) {
+        const emailFormatted = inputLower.includes('@') ? inputLower : `${inputLower}@eluc`;
+        const displayName = rawInput.includes('@') 
+          ? rawInput.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) 
+          : rawInput.replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+        user = {
+          id: `usr-${Date.now()}`,
+          name: displayName || 'Field Auditor',
+          email: emailFormatted,
+          password: password || '1234567',
+          role: 'USER',
+          roleTitle: 'Field Auditor',
+          studentRegNo: `SRO0${Math.floor(100000 + Math.random() * 900000)}`,
+          phone: '+91 98480 ' + Math.floor(10000 + Math.random() * 90000),
+          unit: ORGANIZATIONAL_UNITS[0],
+          subUnit: 'General Audit Desk #1',
+          joinedDate: dateStr,
+          managedBy: 'usr-2'
+        };
+
+        await pool.query(
+          `INSERT INTO users (id, name, email, password, role, roleTitle, studentRegNo, phone, unit, subUnit, joinedDate, managedBy)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [user.id, user.name, user.email, user.password, user.role, user.roleTitle, user.studentRegNo, user.phone, user.unit, user.subUnit, user.joinedDate, user.managedBy]
+        );
+      }
+
+      if (user.password !== password) {
+        return res.status(401).json({ success: false, message: 'Invalid password credentials' });
+      }
+
+      await pool.query(
+        "UPDATE attendance SET active = 0, logoutTime = ?, duration = 'Auto closed on new login' WHERE userId = ? AND active = 1",
+        [timeStr, user.id]
+      );
+
+      const activeLog = {
+        id: `log-${Date.now()}`,
+        userId: user.id,
+        userName: user.name,
+        userEmail: user.email,
+        managerId: user.managedBy || (user.role === 'MANAGER' ? 'usr-1' : null),
+        roleTitle: user.roleTitle || user.role,
+        unit: user.unit || ORGANIZATIONAL_UNITS[0],
+        loginTime: timeStr,
+        logoutTime: null,
+        date: dateStr,
+        timeWindow: `${timeStr} - Active`,
+        duration: 'Session Active',
+        active: 1,
+        serverVerified: 1,
+        serverUtcIso: isoStr,
+        managerRemarks: `${user.roleTitle || user.role} active in portal.`,
+        loginLocation: location ? JSON.stringify(location) : null
+      };
+
+      await pool.query(
+        `INSERT INTO attendance (id, userId, userName, userEmail, managerId, roleTitle, unit, loginTime, logoutTime, date, timeWindow, duration, active, serverVerified, serverUtcIso, managerRemarks, loginLocation)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [activeLog.id, activeLog.userId, activeLog.userName, activeLog.userEmail, activeLog.managerId, activeLog.roleTitle, activeLog.unit, activeLog.loginTime, activeLog.logoutTime, activeLog.date, activeLog.timeWindow, activeLog.duration, activeLog.active, activeLog.serverVerified, activeLog.serverUtcIso, activeLog.managerRemarks, activeLog.loginLocation]
+      );
+
+      if (activeLog.loginLocation) activeLog.loginLocation = JSON.parse(activeLog.loginLocation);
+
+      return res.json({
+        success: true,
+        user,
+        serverTimestamp: timeStr,
+        serverDate: dateStr,
+        activeLog
+      });
+
+    } catch (dbErr) {
+      console.warn('MySQL Login fail (falling back to JSON):', dbErr.message);
+    }
+  }
+
   const db = loadDb();
   let user = null;
 
-  // Check if admin login
   if (inputLower === 'admin' || inputLower === 'admin@eluc' || inputLower === 'superadmin') {
     user = db.users.find(u => u.role === 'SUPER_ADMIN') || {
       id: 'usr-1',
@@ -399,14 +606,12 @@ app.post('/api/auth/login', async (req, res) => {
       managedBy: null
     };
   } else {
-    // Look up by email, name, or id
     user = db.users.find(u => 
       u.email.toLowerCase() === inputLower || 
       u.name.toLowerCase() === inputLower || 
       u.id.toLowerCase() === inputLower
     );
 
-    // If not found, dynamically create user account so ANY user can log in with ANY details!
     if (!user) {
       const emailFormatted = inputLower.includes('@') ? inputLower : `${inputLower}@eluc`;
       const displayName = rawInput.includes('@') 
@@ -431,12 +636,10 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
 
-  // Validate credentials
   if (user && user.password !== password) {
     return res.status(401).json({ success: false, message: 'Invalid password credentials' });
   }
 
-  // Close previous active sessions for this user
   db.attendance = db.attendance.map(rec => {
     if (rec.userId === user.id && rec.active) {
       return { ...rec, active: false, logoutTime: timeStr, duration: 'Auto closed on new login' };
@@ -477,23 +680,128 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 
-// 2. Auth Logout (Server-Authoritative Exit Timestamp & Updates Single Daily Duty Sheet)
 app.post('/api/auth/logout', async (req, res) => {
-  const { userId, logoutRemarks, location } = req.body;
+  const { 
+    userId, 
+    fullName, 
+    studentRegNo, 
+    unitDetails, 
+    subUnitDetails, 
+    auditWorkType, 
+    workObjective, 
+    eodAchievement, 
+    keyEscalations, 
+    detailedWork, 
+    logoutRemarks, 
+    location 
+  } = req.body;
   const { timeStr, dateStr, isoStr } = getServerTimeDetails();
+
+  if (useMySql && pool) {
+    try {
+      const [uRows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+      const user = uRows[0];
+      const targetRegNo = studentRegNo || (user ? user.studentRegNo : '');
+
+      await pool.query(
+        `UPDATE daily_reports 
+         SET fullName = COALESCE(?, fullName),
+             unitDetails = COALESCE(?, unitDetails),
+             subUnitDetails = COALESCE(?, subUnitDetails),
+             auditWorkType = COALESCE(?, auditWorkType),
+             workObjective = COALESCE(?, workObjective),
+             eodAchievement = COALESCE(?, eodAchievement),
+             keyEscalations = COALESCE(?, keyEscalations),
+             detailedWork = COALESCE(?, detailedWork),
+             logoutRemarks = COALESCE(?, logoutRemarks),
+             status = 'COMPLETED & VERIFIED',
+             logoutTime = ?
+         WHERE studentRegNo = ? AND (logoutTime IS NULL OR dutyAssignedDate = ?)`,
+        [
+          fullName, unitDetails, subUnitDetails, auditWorkType, workObjective,
+          eodAchievement, keyEscalations, detailedWork, logoutRemarks,
+          timeStr, targetRegNo, dateStr
+        ]
+      );
+
+      const [attUpdateResult] = await pool.query(
+        `UPDATE attendance 
+         SET active = 0, logoutTime = ?, timeWindow = CONCAT(loginTime, ' - ', ?), duration = 'Session Completed', serverLogoutIso = ?, managerRemarks = ?, logoutLocation = ? 
+         WHERE userId = ? AND active = 1`,
+        [timeStr, timeStr, isoStr, logoutRemarks || 'Logged out by user action.', location ? JSON.stringify(location) : null, userId]
+      );
+
+      if (attUpdateResult.affectedRows === 0) {
+        const activeLog = {
+          id: `log-${Date.now()}`,
+          userId,
+          userName: fullName || user?.name || 'Staff User',
+          userEmail: user?.email || '',
+          managerId: user?.managedBy || null,
+          roleTitle: user?.roleTitle || 'Staff',
+          unit: unitDetails || user?.unit || ORGANIZATIONAL_UNITS[0],
+          loginTime: '09:00:00 AM',
+          logoutTime: timeStr,
+          date: dateStr,
+          timeWindow: `09:00 AM - ${timeStr}`,
+          duration: 'Session Closed',
+          active: 0,
+          serverVerified: 1,
+          managerRemarks: logoutRemarks || 'Logged out by user action.',
+          logoutLocation: location ? JSON.stringify(location) : null
+        };
+        await pool.query(
+          `INSERT INTO attendance (id, userId, userName, userEmail, managerId, roleTitle, unit, loginTime, logoutTime, date, timeWindow, duration, active, serverVerified, managerRemarks, logoutLocation)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+          [activeLog.id, activeLog.userId, activeLog.userName, activeLog.userEmail, activeLog.managerId, activeLog.roleTitle, activeLog.unit, activeLog.loginTime, activeLog.logoutTime, activeLog.date, activeLog.timeWindow, activeLog.duration, activeLog.managerRemarks, activeLog.logoutLocation]
+        );
+      }
+
+      const [allReports] = await pool.query('SELECT * FROM daily_reports ORDER BY id DESC');
+      const [allAttendance] = await pool.query('SELECT * FROM attendance ORDER BY id DESC');
+
+      const formattedAttendance = allAttendance.map(att => {
+        if (att.loginLocation) att.loginLocation = JSON.parse(att.loginLocation);
+        if (att.logoutLocation) att.logoutLocation = JSON.parse(att.logoutLocation);
+        return att;
+      });
+
+      return res.json({
+        success: true,
+        serverLogoutTime: timeStr,
+        serverDate: dateStr,
+        reports: allReports,
+        attendance: formattedAttendance,
+        message: `Session securely closed and exit timestamp recorded on server at ${timeStr}`
+      });
+
+    } catch (dbErr) {
+      console.warn('MySQL Logout fail (falling back to JSON):', dbErr.message);
+    }
+  }
 
   const db = loadDb();
   if (userId) {
-    // 1. Update the SAME single Daily Duty Sheet for today's shift
     if (!db.dailyReports) db.dailyReports = [];
     let reportFound = false;
+    const targetReg = studentRegNo || (db.users.find(u => u.id === userId)?.studentRegNo);
+
     db.dailyReports = db.dailyReports.map(rep => {
-      if ((rep.userId === userId || (rep.studentRegNo && db.users.find(u => u.id === userId)?.studentRegNo === rep.studentRegNo)) && (!rep.logoutTime || rep.date === dateStr)) {
+      if ((rep.userId === userId || (targetReg && rep.studentRegNo === targetReg)) && (!rep.logoutTime || rep.date === dateStr || rep.dutyAssignedDate === dateStr)) {
         reportFound = true;
         return {
           ...rep,
-          logoutTime: timeStr,
+          fullName: fullName || rep.fullName,
+          studentRegNo: targetReg || rep.studentRegNo || '0001',
+          unitDetails: unitDetails || rep.unitDetails,
+          subUnitDetails: subUnitDetails || rep.subUnitDetails || '',
+          auditWorkType: auditWorkType || rep.auditWorkType,
+          workObjective: workObjective || rep.workObjective,
+          eodAchievement: eodAchievement || rep.eodAchievement || rep.targetToAchieve || '',
+          keyEscalations: keyEscalations || rep.keyEscalations || '',
+          detailedWork: detailedWork || rep.detailedWork || '',
           logoutRemarks: logoutRemarks || rep.logoutRemarks || '',
+          logoutTime: timeStr,
           status: 'COMPLETED & VERIFIED',
           concludedAt: isoStr
         };
@@ -501,7 +809,6 @@ app.post('/api/auth/logout', async (req, res) => {
       return rep;
     });
 
-    // If user didn't file 10 parameters before logout, create an entry with login & logout stamped
     if (!reportFound) {
       const user = db.users.find(u => u.id === userId);
       const userAtt = (db.attendance || []).find(a => a.userId === userId && a.active);
@@ -509,24 +816,25 @@ app.post('/api/auth/logout', async (req, res) => {
         id: `dr-${Date.now()}`,
         userId,
         loginTime: userAtt ? userAtt.loginTime : '09:00:00 AM',
-        fullName: user?.name || 'Audit Staff',
-        studentRegNo: user?.studentRegNo || 'SRO0684920',
-        unitDetails: user?.unit || ORGANIZATIONAL_UNITS[0],
-        subUnitDetails: user?.subUnit || 'General Unit Counter',
-        auditWorkType: 'Concurrent Audit',
-        workObjective: 'Daily audit duty & physical verification',
-        targetToAchieve: 'Standard compliance verified',
-        caRemarks: '',
-        pocName: 'Duty Officer',
-        logoutTime: timeStr,
+        fullName: fullName || user?.name || 'Audit Staff',
+        studentRegNo: targetReg || user?.studentRegNo || '0001',
+        unitDetails: unitDetails || user?.unit || ORGANIZATIONAL_UNITS[0],
+        subUnitDetails: subUnitDetails || user?.subUnit || 'General Unit Counter',
+        auditWorkType: auditWorkType || 'Monthly Internal Audit',
+        workObjective: workObjective || 'Daily audit duty & physical verification',
+        eodAchievement: eodAchievement || 'Work achieved by end of day',
+        keyEscalations: keyEscalations || '',
+        detailedWork: detailedWork || '',
         logoutRemarks: logoutRemarks || 'Standard evening shift conclusion',
+        logoutTime: timeStr,
         status: 'COMPLETED & VERIFIED',
         date: dateStr,
-        createdAt: new Date().toISOString()
+        dutyAssignedDate: dateStr,
+        timestamp: timeStr,
+        concludedAt: isoStr
       });
     }
 
-    // 2. Update Attendance Ledger with matching logout time and remarks
     let attFound = false;
     db.attendance = (db.attendance || []).map(rec => {
       if (rec.userId === userId && rec.active) {
@@ -623,17 +931,8 @@ app.post('/api/attendance/toggle', async (req, res) => {
 app.get('/api/users', async (req, res) => {
   if (useMySql && pool) {
     try {
-      const [rows] = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
-      const formatted = rows.map(u => ({
-        id: u.id,
-        name: u.name,
-        email: u.email,
-        role: u.role,
-        roleTitle: u.role_title,
-        unit: u.unit,
-        managedBy: u.managed_by
-      }));
-      return res.json({ success: true, users: formatted });
+      const [rows] = await pool.query('SELECT * FROM users ORDER BY id DESC');
+      return res.json({ success: true, users: rows });
     } catch (err) {
       console.warn('MySQL get users fallback:', err.message);
     }
@@ -649,14 +948,15 @@ app.post('/api/users', async (req, res) => {
   const role = roleTitle.includes('Manager') ? 'MANAGER' : (roleTitle.includes('Super') ? 'SUPER_ADMIN' : 'USER');
   const newId = `usr-${Date.now()}`;
   const emailClean = email.trim().toLowerCase();
+  const { dateStr } = getServerTimeDetails();
 
   if (useMySql && pool) {
     try {
       await pool.query(
-        'INSERT INTO users (id, name, email, password, role, role_title, unit, managed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [newId, name.trim(), emailClean, password || '1234567', role, roleTitle, unit || ORGANIZATIONAL_UNITS[0], managerId || 'usr-1']
+        'INSERT INTO users (id, name, email, password, role, roleTitle, unit, managedBy, joinedDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [newId, name.trim(), emailClean, password || '1234567', role, roleTitle, unit || ORGANIZATIONAL_UNITS[0], managerId || 'usr-1', dateStr]
       );
-      const [allUsers] = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
+      const [allUsers] = await pool.query('SELECT * FROM users ORDER BY id DESC');
       return res.json({
         success: true,
         user: { id: newId, name, email: emailClean, role, roleTitle, unit, managedBy: managerId },
@@ -691,8 +991,8 @@ app.patch('/api/users/:id/role', async (req, res) => {
 
   if (useMySql && pool) {
     try {
-      await pool.query('UPDATE users SET role_title = ?, unit = ? WHERE id = ?', [roleTitle, unit, id]);
-      await pool.query('UPDATE attendance SET role_title = ?, unit = ? WHERE user_id = ?', [roleTitle, unit, id]);
+      await pool.query('UPDATE users SET roleTitle = ?, unit = ? WHERE id = ?', [roleTitle, unit, id]);
+      await pool.query('UPDATE attendance SET roleTitle = ?, unit = ? WHERE userId = ?', [roleTitle, unit, id]);
       return res.json({ success: true });
     } catch (err) {
       console.warn('MySQL role update fallback:', err.message);
@@ -724,30 +1024,42 @@ app.get('/api/attendance', async (req, res) => {
 
   if (useMySql && pool) {
     try {
-      let query = 'SELECT * FROM attendance ORDER BY created_at DESC';
+      let query = 'SELECT * FROM attendance ORDER BY id DESC';
       let params = [];
       if (role === 'MANAGER' && managerId) {
-        query = 'SELECT * FROM attendance WHERE manager_id = ? ORDER BY created_at DESC';
+        query = 'SELECT * FROM attendance WHERE managerId = ? ORDER BY id DESC';
         params = [managerId];
       }
       const [rows] = await pool.query(query, params);
-      const formatted = rows.map(r => ({
-        id: r.id,
-        userId: r.user_id,
-        userName: r.user_name,
-        userEmail: r.user_email,
-        managerId: r.manager_id,
-        roleTitle: r.role_title,
-        unit: r.unit,
-        loginTime: r.login_time,
-        logoutTime: r.logout_time,
-        date: r.date_str,
-        timeWindow: r.time_window,
-        duration: r.duration,
-        active: Boolean(r.is_active),
-        serverVerified: Boolean(r.server_verified),
-        managerRemarks: r.manager_remarks
-      }));
+      const formatted = rows.map(r => {
+        // Parse locations safely
+        let loginLoc = null;
+        let logoutLoc = null;
+        try {
+          if (r.loginLocation) loginLoc = JSON.parse(r.loginLocation);
+          if (r.logoutLocation) logoutLoc = JSON.parse(r.logoutLocation);
+        } catch (e) {}
+        
+        return {
+          id: r.id,
+          userId: r.userId,
+          userName: r.userName,
+          userEmail: r.userEmail,
+          managerId: r.managerId,
+          roleTitle: r.roleTitle,
+          unit: r.unit,
+          loginTime: r.loginTime,
+          logoutTime: r.logoutTime,
+          date: r.date,
+          timeWindow: r.timeWindow,
+          duration: r.duration,
+          active: Boolean(r.active),
+          serverVerified: Boolean(r.serverVerified),
+          managerRemarks: r.managerRemarks,
+          loginLocation: loginLoc,
+          logoutLocation: logoutLoc
+        };
+      });
       return res.json({ success: true, attendance: formatted });
     } catch (err) {
       console.warn('MySQL attendance get fallback:', err.message);
@@ -983,35 +1295,104 @@ app.patch('/api/complaints/:id/status', async (req, res) => {
 
 // ── Daily Audit Duty & Work Reports Endpoints ──
 
-app.get('/api/daily-reports', (req, res) => {
+app.get('/api/daily-reports', async (req, res) => {
+  if (useMySql && pool) {
+    try {
+      const [rows] = await pool.query('SELECT * FROM daily_reports ORDER BY id DESC');
+      return res.json({ success: true, reports: rows });
+    } catch (err) {
+      console.warn('MySQL get reports fallback:', err.message);
+    }
+  }
+
   const db = loadDb();
   res.json({ success: true, reports: db.dailyReports || [] });
 });
 
-app.post('/api/daily-reports', (req, res) => {
+app.post('/api/daily-reports', async (req, res) => {
   const {
     userId,
     loginTime,
     fullName,
     studentRegNo,
     unitDetails,
-    subUnitDetails,
+    studentPhone,
+    dutyAssignedDate,
+    dutyTimePeriod,
+    reportVerificationTime,
     auditWorkType,
     workObjective,
-    targetToAchieve,
+    vouchersVerified,
     caRemarks,
-    pocName,
-    logoutTime,
-    logoutRemarks,
     status
   } = req.body;
+
+  const { timeStr, dateStr } = getServerTimeDetails();
+  const targetDate = dutyAssignedDate || dateStr;
+
+  if (useMySql && pool) {
+    try {
+      const [rows] = await pool.query(
+        'SELECT * FROM daily_reports WHERE studentRegNo = ? AND dutyAssignedDate = ?',
+        [studentRegNo, targetDate]
+      );
+
+      let targetReport;
+      if (rows.length > 0) {
+        targetReport = rows[0];
+        await pool.query(
+          `UPDATE daily_reports 
+           SET fullName = ?, unitDetails = ?, studentPhone = ?, dutyTimePeriod = ?, reportVerificationTime = ?, auditWorkType = ?, workObjective = ?, vouchersVerified = ?, caRemarks = ?, status = ?
+           WHERE id = ?`,
+          [
+            fullName || targetReport.fullName,
+            unitDetails || targetReport.unitDetails,
+            studentPhone || targetReport.studentPhone,
+            dutyTimePeriod || targetReport.dutyTimePeriod,
+            reportVerificationTime || targetReport.reportVerificationTime,
+            auditWorkType || targetReport.auditWorkType,
+            workObjective || targetReport.workObjective,
+            vouchersVerified || targetReport.vouchersVerified,
+            caRemarks !== undefined ? caRemarks : targetReport.caRemarks,
+            status || targetReport.status,
+            targetReport.id
+          ]
+        );
+      } else {
+        const newId = `dr-${Date.now()}`;
+        await pool.query(
+          `INSERT INTO daily_reports (id, fullName, studentRegNo, unitDetails, studentPhone, dutyAssignedDate, dutyTimePeriod, reportVerificationTime, auditWorkType, workObjective, vouchersVerified, caRemarks, status, createdAt, studentEmail)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            newId,
+            fullName || 'Audit Student',
+            studentRegNo || '',
+            unitDetails || ORGANIZATIONAL_UNITS[0],
+            studentPhone || '',
+            targetDate,
+            dutyTimePeriod || timeStr,
+            reportVerificationTime || '',
+            auditWorkType || 'Monthly Internal Audit',
+            workObjective || '',
+            vouchersVerified || '0',
+            caRemarks || '',
+            status || 'SUBMITTED',
+            new Date().toISOString(),
+            ''
+          ]
+        );
+      }
+
+      const [allReports] = await pool.query('SELECT * FROM daily_reports ORDER BY id DESC');
+      return res.json({ success: true, reports: allReports });
+    } catch (err) {
+      console.warn('MySQL post report fallback:', err.message);
+    }
+  }
 
   const db = loadDb();
   if (!db.dailyReports) db.dailyReports = [];
 
-  const { timeStr, dateStr } = getServerTimeDetails();
-
-  // Check if an existing sheet exists for this user today
   let existingIndex = db.dailyReports.findIndex(r => 
     (userId && r.userId === userId && r.date === dateStr) ||
     (studentRegNo && r.studentRegNo === studentRegNo && r.date === dateStr)
@@ -1019,27 +1400,23 @@ app.post('/api/daily-reports', (req, res) => {
 
   let targetReport;
   if (existingIndex >= 0) {
-    // Update existing single sheet
     db.dailyReports[existingIndex] = {
       ...db.dailyReports[existingIndex],
       loginTime: db.dailyReports[existingIndex].loginTime || loginTime || timeStr,
       fullName: fullName || db.dailyReports[existingIndex].fullName,
       studentRegNo: studentRegNo || db.dailyReports[existingIndex].studentRegNo,
       unitDetails: unitDetails || db.dailyReports[existingIndex].unitDetails,
-      subUnitDetails: subUnitDetails || db.dailyReports[existingIndex].subUnitDetails,
+      studentPhone: studentPhone || db.dailyReports[existingIndex].studentPhone || '',
+      dutyAssignedDate: targetDate,
       auditWorkType: auditWorkType || db.dailyReports[existingIndex].auditWorkType,
       workObjective: workObjective || db.dailyReports[existingIndex].workObjective,
-      targetToAchieve: targetToAchieve || db.dailyReports[existingIndex].targetToAchieve,
+      vouchersVerified: vouchersVerified || db.dailyReports[existingIndex].vouchersVerified,
       caRemarks: caRemarks !== undefined ? caRemarks : db.dailyReports[existingIndex].caRemarks,
-      pocName: pocName || db.dailyReports[existingIndex].pocName,
-      logoutTime: logoutTime || db.dailyReports[existingIndex].logoutTime || null,
-      logoutRemarks: logoutRemarks || db.dailyReports[existingIndex].logoutRemarks || '',
-      status: status || (logoutTime ? 'COMPLETED & VERIFIED' : 'ACTIVE_DUTY'),
+      status: status || (null ? 'COMPLETED & VERIFIED' : 'ACTIVE_DUTY'),
       updatedAt: new Date().toISOString()
     };
     targetReport = db.dailyReports[existingIndex];
   } else {
-    // Create new single sheet
     targetReport = {
       id: `dr-${Date.now()}`,
       userId: userId || null,
@@ -1047,15 +1424,13 @@ app.post('/api/daily-reports', (req, res) => {
       fullName: fullName || 'Audit Student',
       studentRegNo: studentRegNo || '',
       unitDetails: unitDetails || ORGANIZATIONAL_UNITS[0],
-      subUnitDetails: subUnitDetails || '',
-      auditWorkType: auditWorkType || 'Concurrent Audit',
+      studentPhone: studentPhone || '',
+      dutyAssignedDate: targetDate,
+      auditWorkType: auditWorkType || 'Monthly Internal Audit',
       workObjective: workObjective || '',
-      targetToAchieve: targetToAchieve || '',
+      vouchersVerified: vouchersVerified || '0',
       caRemarks: caRemarks || '',
-      pocName: pocName || '',
-      logoutTime: logoutTime || null,
-      logoutRemarks: logoutRemarks || '',
-      status: status || (logoutTime ? 'COMPLETED & VERIFIED' : 'ACTIVE_DUTY'),
+      status: status || 'SUBMITTED',
       date: dateStr,
       createdAt: new Date().toISOString()
     };
@@ -1074,12 +1449,35 @@ app.get('/api/server-time', (req, res) => {
 });
 
 // ── Minutes of Meeting (MOM) Endpoints ──
-app.get('/api/moms', (req, res) => {
+app.get('/api/moms', async (req, res) => {
+  if (useMySql && pool) {
+    try {
+      const [rows] = await pool.query('SELECT * FROM moms ORDER BY id DESC');
+      const formatted = rows.map(r => ({
+        id: r.id,
+        title: r.title,
+        type: r.type,
+        date: r.date,
+        time: r.time,
+        organizer: r.organizer,
+        location: r.location,
+        attendees: r.attendees,
+        agenda: r.agenda,
+        discussions: r.discussions,
+        actionItems: r.actionItems,
+        nextMeeting: r.nextMeeting
+      }));
+      return res.json({ success: true, moms: formatted });
+    } catch (err) {
+      console.warn('MySQL get moms fallback:', err.message);
+    }
+  }
+
   const db = loadDb();
   res.json({ success: true, moms: db.moms || [] });
 });
 
-app.post('/api/moms', (req, res) => {
+app.post('/api/moms', async (req, res) => {
   const {
     meetingTitle,
     meetingType,
@@ -1091,14 +1489,56 @@ app.post('/api/moms', (req, res) => {
     agenda,
     discussions,
     actionItems,
-    nextMeeting,
-    authorId
+    nextMeeting
   } = req.body;
+
+  const { timeStr, dateStr } = getServerTimeDetails();
+
+  if (useMySql && pool) {
+    try {
+      const newId = `mom-${Date.now()}`;
+      await pool.query(
+        `INSERT INTO moms (id, title, type, date, time, organizer, location, attendees, agenda, discussions, actionItems, nextMeeting)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newId,
+          meetingTitle || 'Weekly Team Meeting',
+          meetingType || 'Team Meeting',
+          date || dateStr,
+          time || timeStr,
+          organizer || 'Demo Managing Partner',
+          location || 'Conference Room A',
+          attendees || '',
+          agenda || '',
+          discussions || '',
+          actionItems || '',
+          nextMeeting || ''
+        ]
+      );
+
+      const [rows] = await pool.query('SELECT * FROM moms ORDER BY id DESC');
+      const formatted = rows.map(r => ({
+        id: r.id,
+        title: r.title,
+        type: r.type,
+        date: r.date,
+        time: r.time,
+        organizer: r.organizer,
+        location: r.location,
+        attendees: r.attendees,
+        agenda: r.agenda,
+        discussions: r.discussions,
+        actionItems: r.actionItems,
+        nextMeeting: r.nextMeeting
+      }));
+      return res.json({ success: true, moms: formatted });
+    } catch (err) {
+      console.warn('MySQL post mom fallback:', err.message);
+    }
+  }
 
   const db = loadDb();
   if (!db.moms) db.moms = [];
-
-  const { timeStr, dateStr } = getServerTimeDetails();
 
   const newMom = {
     id: `mom-${Date.now()}`,
@@ -1113,7 +1553,6 @@ app.post('/api/moms', (req, res) => {
     discussions: discussions || '',
     actionItems: actionItems || '',
     nextMeeting: nextMeeting || '',
-    authorId: authorId || null,
     serverTimestamp: `${timeStr} • ${dateStr}`,
     createdAt: new Date().toISOString()
   };
@@ -1125,12 +1564,32 @@ app.post('/api/moms', (req, res) => {
 });
 
 // ── Tasks Creation & Management Endpoints ──
-app.get('/api/tasks', (req, res) => {
+app.get('/api/tasks', async (req, res) => {
+  if (useMySql && pool) {
+    try {
+      const [rows] = await pool.query('SELECT * FROM tasks ORDER BY id DESC');
+      const formatted = rows.map(r => ({
+        id: r.id,
+        title: r.title,
+        priority: r.priority,
+        description: r.description,
+        assignedTo: r.assignedTo,
+        dueDate: r.dueDate,
+        project: r.project,
+        category: r.category,
+        status: r.status
+      }));
+      return res.json({ success: true, tasks: formatted });
+    } catch (err) {
+      console.warn('MySQL get tasks fallback:', err.message);
+    }
+  }
+
   const db = loadDb();
   res.json({ success: true, tasks: db.tasks || [] });
 });
 
-app.post('/api/tasks', (req, res) => {
+app.post('/api/tasks', async (req, res) => {
   const {
     taskTitle,
     priority,
@@ -1138,15 +1597,49 @@ app.post('/api/tasks', (req, res) => {
     assignedTo,
     dueDate,
     project,
-    category,
-    createdById,
-    createdByName
+    category
   } = req.body;
+
+  const { timeStr, dateStr } = getServerTimeDetails();
+
+  if (useMySql && pool) {
+    try {
+      const newId = `tsk-${Date.now()}`;
+      await pool.query(
+        `INSERT INTO tasks (id, title, description, priority, category, project, assignedTo, dueDate, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'IN_PROGRESS')`,
+        [
+          newId,
+          taskTitle || 'Audit Verification Task',
+          description || '',
+          priority || 'Medium Priority',
+          category || 'General',
+          project || '',
+          assignedTo || 'Demo Managing Partner',
+          dueDate || dateStr
+        ]
+      );
+
+      const [rows] = await pool.query('SELECT * FROM tasks ORDER BY id DESC');
+      const formatted = rows.map(r => ({
+        id: r.id,
+        title: r.title,
+        priority: r.priority,
+        description: r.description,
+        assignedTo: r.assignedTo,
+        dueDate: r.dueDate,
+        project: r.project,
+        category: r.category,
+        status: r.status
+      }));
+      return res.json({ success: true, tasks: formatted });
+    } catch (err) {
+      console.warn('MySQL post task fallback:', err.message);
+    }
+  }
 
   const db = loadDb();
   if (!db.tasks) db.tasks = [];
-
-  const { timeStr, dateStr } = getServerTimeDetails();
 
   const newTask = {
     id: `tsk-${Date.now()}`,
@@ -1158,8 +1651,6 @@ app.post('/api/tasks', (req, res) => {
     project: project || '',
     category: category || 'General',
     status: 'IN_PROGRESS',
-    createdById: createdById || null,
-    createdByName: createdByName || 'Staff Member',
     serverTimestamp: `${timeStr} • ${dateStr}`,
     createdAt: new Date().toISOString()
   };
